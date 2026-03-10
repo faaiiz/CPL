@@ -1,0 +1,11 @@
+Kode,Nama,Semester,Jenis,SKS
+MAT101,Matematika Dasar,1,wajib,3
+FIS101,Fisika Dasar,1,wajib,3
+KIM101,Kimia Dasar,1,wajib,2
+ENG101,Bahasa Inggris,1,wajib,2
+PEM101,Pemrograman Dasar,1,wajib,3
+ALG101,Algoritma,2,wajib,3
+BDD101,Basis Data,2,wajib,3
+SIM101,Sistem Informasi,3,pilihan,2
+WEB101,Pemrograman Web,3,wajib,3
+MOB101,Pemrograman Mobile,4,pilihan,3
