@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:file_picker/file_picker.dart';
+import 'dart:typed_data';
 import '../constants/app_constants.dart';
 import '../services/excel_import_service.dart';
 import '../services/template_service.dart';
@@ -66,6 +68,7 @@ class _NilaiDetailImportScreenState extends State<NilaiDetailImportScreen>
   String? _selectedMatakuliahId;
   String? _selectedMatakuliahKode;
   String? _selectedFilePath;
+  Uint8List? _selectedFileBytes;
   String? _selectedFileName;
   bool _isLoading = false;
   Map<String, dynamic>? _importResult;
@@ -186,11 +189,22 @@ class _NilaiDetailImportScreenState extends State<NilaiDetailImportScreen>
       );
 
       if (result != null && result.files.isNotEmpty) {
+        final file = result.files.first;
         setState(() {
-          _selectedFilePath = result.files.first.path;
-          _selectedFileName = result.files.first.name;
+          _selectedFileName = file.name;
           _importResult = null;
           _importErrors = [];
+          
+          // Handle platform-specific file access
+          if (kIsWeb) {
+            // On web, use bytes
+            _selectedFileBytes = file.bytes;
+            _selectedFilePath = ''; // Empty path for web
+          } else {
+            // On desktop, use path
+            _selectedFilePath = file.path;
+            _selectedFileBytes = null;
+          }
         });
       }
     } catch (e) {
@@ -203,7 +217,7 @@ class _NilaiDetailImportScreenState extends State<NilaiDetailImportScreen>
   }
 
   Future<void> _importData() async {
-    if (_selectedFilePath == null) {
+    if (_selectedFilePath == null && _selectedFileBytes == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Pilih file Excel terlebih dahulu')),
       );
@@ -228,8 +242,10 @@ class _NilaiDetailImportScreenState extends State<NilaiDetailImportScreen>
 
     try {
       final result = await _excelService.importNilaiDetailFromExcel(
-        _selectedFilePath!,
+        _selectedFilePath ?? '',
         matakuliahFilter: _selectedMatakuliahKode,
+        fileBytes: _selectedFileBytes,
+        fileName: _selectedFileName,
       );
 
       setState(() {
@@ -649,6 +665,7 @@ class _NilaiDetailImportScreenState extends State<NilaiDetailImportScreen>
                       onPressed: () {
                         setState(() {
                           _selectedFilePath = null;
+                          _selectedFileBytes = null;
                           _selectedFileName = null;
                           _importResult = null;
                           _importErrors = [];

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:file_picker/file_picker.dart';
+import 'dart:typed_data';
 import '../constants/app_constants.dart';
 import '../services/excel_import_service.dart';
 import '../services/template_service.dart';
@@ -24,6 +26,7 @@ class ImportDialog extends StatefulWidget {
 class _ImportDialogState extends State<ImportDialog> {
   final _excelService = ExcelImportService();
   String? _selectedFilePath;
+  Uint8List? _selectedFileBytes;
   String? _selectedFileName;
   bool _isLoading = false;
   List<String> _importErrors = [];
@@ -37,11 +40,22 @@ class _ImportDialogState extends State<ImportDialog> {
       );
 
       if (result != null && result.files.isNotEmpty) {
+        final file = result.files.first;
         setState(() {
-          _selectedFilePath = result.files.first.path;
-          _selectedFileName = result.files.first.name;
+          _selectedFileName = file.name;
           _importResult = null;
           _importErrors = [];
+          
+          // Handle platform-specific file access
+          if (kIsWeb) {
+            // On web, use bytes
+            _selectedFileBytes = file.bytes;
+            _selectedFilePath = ''; // Empty path for web
+          } else {
+            // On desktop, use path
+            _selectedFilePath = file.path;
+            _selectedFileBytes = null;
+          }
         });
       }
     } catch (e) {
@@ -52,7 +66,7 @@ class _ImportDialogState extends State<ImportDialog> {
   }
 
   Future<void> _importData() async {
-    if (_selectedFilePath == null) {
+    if (_selectedFilePath == null && _selectedFileBytes == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Pilih file Excel terlebih dahulu')),
       );
@@ -63,27 +77,51 @@ class _ImportDialogState extends State<ImportDialog> {
 
     try {
       Map<String, dynamic> result;
+      
+      String filePath = _selectedFilePath ?? '';
+      Uint8List? fileBytes = _selectedFileBytes;
+      String? fileName = _selectedFileName;
 
       if (widget.importType == 'mahasiswa') {
-        result =
-            await _excelService.importMahasiswaFromExcel(_selectedFilePath!);
+        result = await _excelService.importMahasiswaFromExcel(
+          filePath,
+          fileBytes: fileBytes,
+          fileName: fileName,
+        );
       } else if (widget.importType == 'matakuliah') {
-        result =
-            await _excelService.importMatakuliahFromExcel(_selectedFilePath!);
+        result = await _excelService.importMatakuliahFromExcel(
+          filePath,
+          fileBytes: fileBytes,
+          fileName: fileName,
+        );
       } else if (widget.importType == 'cpl') {
-        result = await _excelService.importCPLFromExcel(_selectedFilePath!);
+        result = await _excelService.importCPLFromExcel(
+          filePath,
+          fileBytes: fileBytes,
+          fileName: fileName,
+        );
       } else if (widget.importType == 'cpmk') {
-        result = await _excelService.importCPMKFromExcel(_selectedFilePath!);
+        result = await _excelService.importCPMKFromExcel(
+          filePath,
+          fileBytes: fileBytes,
+          fileName: fileName,
+        );
       } else if (widget.importType == 'sub_cpmk') {
         if (widget.matakuliahId == null) {
           throw Exception('Mata Kuliah ID harus diisi untuk import Sub CPMK');
         }
         result = await _excelService.importSubCPMKFromExcel(
-          _selectedFilePath!,
+          filePath,
           widget.matakuliahId!,
+          fileBytes: fileBytes,
+          fileName: fileName,
         );
       } else {
-        result = await _excelService.importNilaiFromExcel(_selectedFilePath!);
+        result = await _excelService.importNilaiFromExcel(
+          filePath,
+          fileBytes: fileBytes,
+          fileName: fileName,
+        );
       }
 
       setState(() {

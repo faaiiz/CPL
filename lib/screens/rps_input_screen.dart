@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:file_picker/file_picker.dart';
 import '../models/matakuliah_model.dart';
 import '../models/rps_detail_model.dart';
 import '../models/rps_detail_sub_cpmk_bobot_model.dart';
@@ -8,6 +9,8 @@ import '../models/sub_cpmk_model.dart';
 import '../models/cpl_master_model.dart';
 import '../constants/app_constants.dart';
 import '../services/database_helper.dart';
+import '../services/excel_import_service.dart';
+
 import '../widgets/custom_widgets.dart';
 
 class RPSInputScreen extends StatefulWidget {
@@ -19,8 +22,10 @@ class RPSInputScreen extends StatefulWidget {
 
 class _RPSInputScreenState extends State<RPSInputScreen> {
   final _dbHelper = DatabaseHelper();
+  final _excelImportService = ExcelImportService();
   late Future<List<Matakuliah>> _matakuliahList;
   List<CPLMaster> _allCPL = [];
+
   final Map<int, List<RPSDetail>> _rpsCache = {};
 
   @override
@@ -32,9 +37,10 @@ class _RPSInputScreenState extends State<RPSInputScreen> {
   void _loadMatakuliah() async {
     try {
       final cpls = await _dbHelper.getAllCPLMaster();
+      final mks = await _dbHelper.getAllMatakuliah();
       
       setState(() {
-        _matakuliahList = _dbHelper.getAllMatakuliah();
+        _matakuliahList = Future.value(mks);
         _allCPL = cpls;
       });
     } catch (e) {
@@ -44,6 +50,531 @@ class _RPSInputScreenState extends State<RPSInputScreen> {
         );
       }
     }
+  }
+
+  Future<void> _importSubCPMKBatch() async {
+    try {
+      // Pilih multiple files
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['xlsx', 'csv'],
+        allowMultiple: true, // ALLOW MULTIPLE FILES
+      );
+
+      if (result == null || result.files.isEmpty) {
+        return;
+      }
+
+      final filePaths = result.files.map((f) => f.path).whereType<String>().toList();
+      if (filePaths.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Error: File path tidak valid'),
+              backgroundColor: AppColors.danger,
+            ),
+          );
+        }
+        return;
+      }
+
+      if (!mounted) return;
+
+      // Show loading dialog
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => AlertDialog(
+          title: const Text('Sedang Mengimport Sub CPMK'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 20),
+              const CircularProgressIndicator(),
+              const SizedBox(height: 20),
+              Text(
+                'Mengimport ${filePaths.length} file Sub CPMK...',
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 14),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                'Silakan tunggu, jangan tutup aplikasi',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Colors.grey[600],
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+
+      // Import all files
+      final importResult = await _excelImportService.importSubCPMKBatchMultipleFiles(
+        filePaths,
+      );
+
+      if (!mounted) return;
+
+      // Close loading dialog
+      Navigator.of(context).pop();
+
+      // Tampilkan hasil
+      if (importResult['success']) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('✓ ${importResult['message']}'),
+            backgroundColor: AppColors.success,
+            duration: const Duration(seconds: 4),
+          ),
+        );
+
+        // Show detail dialog
+        _showImportResultDialog(importResult);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('⚠ ${importResult['message']}'),
+            backgroundColor: AppColors.warning,
+            duration: const Duration(seconds: 4),
+          ),
+        );
+
+        // Show detail dialog
+        _showImportResultDialog(importResult);
+      }
+    } catch (e) {
+      if (mounted) {
+        // Close loading dialog jika ada error
+        Navigator.of(context).pop();
+        
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: ${e.toString()}'),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+    }
+  }
+
+  void _showImportResultDialog(Map<String, dynamic> importResult) {
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Hasil Import Sub CPMK'),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Ringkasan
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: importResult['success']
+                      ? Colors.green.withOpacity(0.1)
+                      : Colors.orange.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      importResult['message'] ?? 'Import selesai',
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceAround,
+                      children: [
+                        Column(
+                          children: [
+                            Text(
+                              '${importResult['totalImported']}',
+                              style: const TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.green,
+                              ),
+                            ),
+                            const Text('Berhasil', style: TextStyle(fontSize: 12)),
+                          ],
+                        ),
+                        Column(
+                          children: [
+                            Text(
+                              '${importResult['totalFailed']}',
+                              style: const TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.red,
+                              ),
+                            ),
+                            const Text('Gagal', style: TextStyle(fontSize: 12)),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 16),
+
+              // Detail per file
+              const Text(
+                'Detail Per File:',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+              ),
+              const SizedBox(height: 8),
+
+              ...(importResult['fileResults'] as List<dynamic>? ?? [])
+                  .map<Widget>((fileResult) {
+                final result = fileResult as Map<String, dynamic>;
+                final success = result['success'] as bool;
+                final fileName = result['fileName'] as String;
+                final matakuliah = result['matakuliah'] as String?;
+                final message = result['message'] as String;
+
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: success ? Colors.green.withOpacity(0.05) : Colors.red.withOpacity(0.05),
+                      border: Border.all(
+                        color: success ? Colors.green : Colors.red,
+                        width: 1,
+                      ),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(
+                              success ? Icons.check_circle : Icons.error,
+                              color: success ? Colors.green : Colors.red,
+                              size: 16,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                fileName,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 12,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
+                        ),
+                        if (matakuliah != null) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            'Matakuliah: $matakuliah',
+                            style: const TextStyle(fontSize: 11),
+                          ),
+                        ],
+                        const SizedBox(height: 4),
+                        Text(
+                          message,
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: success ? Colors.green[700] : Colors.red[700],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              }).toList(),
+            ],
+          ),
+        ),
+        actions: [
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Tutup'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _importRPSBatch() async {
+    try {
+      // Pilih multiple files
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['xlsx', 'csv'],
+        allowMultiple: true,
+      );
+
+      if (result == null || result.files.isEmpty) {
+        return;
+      }
+
+      final filePaths = result.files.map((f) => f.path).whereType<String>().toList();
+      if (filePaths.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Error: File path tidak valid'),
+              backgroundColor: AppColors.danger,
+            ),
+          );
+        }
+        return;
+      }
+
+      if (!mounted) return;
+
+      // Show loading dialog
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => AlertDialog(
+          title: const Text('Sedang Mengimport RPS'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 20),
+              const CircularProgressIndicator(),
+              const SizedBox(height: 20),
+              Text(
+                'Mengimport ${filePaths.length} file RPS...',
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 14),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                'Silakan tunggu, jangan tutup aplikasi',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Colors.grey[600],
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+
+      // Import all files
+      final importResult = await _excelImportService.importRPSBatchMultipleFiles(
+        filePaths,
+      );
+
+      if (!mounted) return;
+
+      // Close loading dialog
+      Navigator.of(context).pop();
+
+      // Tampilkan hasil
+      if (importResult['success']) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('✓ ${importResult['message']}'),
+            backgroundColor: AppColors.success,
+            duration: const Duration(seconds: 4),
+          ),
+        );
+
+        // Show detail dialog
+        _showRPSImportResultDialog(importResult);
+
+        // Refresh cache
+        _rpsCache.clear();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('⚠ ${importResult['message']}'),
+            backgroundColor: AppColors.warning,
+            duration: const Duration(seconds: 4),
+          ),
+        );
+
+        // Show detail dialog
+        _showRPSImportResultDialog(importResult);
+      }
+    } catch (e) {
+      if (mounted) {
+        // Close loading dialog jika ada error
+        Navigator.of(context).pop();
+        
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: ${e.toString()}'),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+    }
+  }
+
+  void _showRPSImportResultDialog(Map<String, dynamic> importResult) {
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Hasil Import RPS'),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Ringkasan
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: importResult['success']
+                      ? Colors.green.withOpacity(0.1)
+                      : Colors.orange.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      importResult['message'] ?? 'Import selesai',
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceAround,
+                      children: [
+                        Column(
+                          children: [
+                            Text(
+                              '${importResult['totalImported']}',
+                              style: const TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.green,
+                              ),
+                            ),
+                            const Text('Berhasil', style: TextStyle(fontSize: 12)),
+                          ],
+                        ),
+                        Column(
+                          children: [
+                            Text(
+                              '${importResult['totalFailed']}',
+                              style: const TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.red,
+                              ),
+                            ),
+                            const Text('Gagal', style: TextStyle(fontSize: 12)),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 16),
+
+              // Detail per file
+              const Text(
+                'Detail Per File:',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+              ),
+              const SizedBox(height: 8),
+
+              ...(importResult['fileResults'] as List<dynamic>? ?? [])
+                  .map<Widget>((fileResult) {
+                final result = fileResult as Map<String, dynamic>;
+                final success = result['success'] as bool;
+                final fileName = result['fileName'] as String;
+                final matakuliah = result['matakuliah'] as String?;
+                final message = result['message'] as String;
+                final imported = result['imported'] as int?;
+
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: success ? Colors.green.withOpacity(0.05) : Colors.red.withOpacity(0.05),
+                      border: Border.all(
+                        color: success ? Colors.green : Colors.red,
+                        width: 1,
+                      ),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(
+                              success ? Icons.check_circle : Icons.error,
+                              color: success ? Colors.green : Colors.red,
+                              size: 16,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                fileName,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 12,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
+                        ),
+                        if (matakuliah != null) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            'Matakuliah: $matakuliah',
+                            style: const TextStyle(fontSize: 11),
+                          ),
+                        ],
+                        if (imported != null && imported > 0) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            'Jumlah RPS: $imported minggu',
+                            style: const TextStyle(fontSize: 11),
+                          ),
+                        ],
+                        const SizedBox(height: 4),
+                        Text(
+                          message,
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: success ? Colors.green[700] : Colors.red[700],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              }).toList(),
+            ],
+          ),
+        ),
+        actions: [
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Tutup'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _loadRPSData(int matakuliahId) async {
@@ -657,6 +1188,43 @@ class _RPSInputScreenState extends State<RPSInputScreen> {
         title: const Text('Input RPS (Rencana Pembelajaran Semester)'),
         backgroundColor: const Color(0xFFE67E22),
         elevation: 4,
+        actions: [
+          PopupMenuButton<String>(
+            onSelected: (value) {
+              if (value == 'import_subcpmk') {
+                _importSubCPMKBatch();
+              } else if (value == 'import_rps') {
+                _importRPSBatch();
+              }
+            },
+            itemBuilder: (BuildContext context) => [
+              const PopupMenuItem<String>(
+                value: 'import_subcpmk',
+                child: Row(
+                  children: [
+                    Icon(Icons.upload_file, color: Colors.green, size: 18),
+                    SizedBox(width: 10),
+                    Text('Import Sub CPMK Batch'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem<String>(
+                value: 'import_rps',
+                child: Row(
+                  children: [
+                    Icon(Icons.upload_file, color: Colors.orange, size: 18),
+                    SizedBox(width: 10),
+                    Text('Import RPS Batch'),
+                  ],
+                ),
+              ),
+            ],
+            child: const Padding(
+              padding: EdgeInsets.all(8.0),
+              child: Icon(Icons.more_vert, color: Colors.white),
+            ),
+          ),
+        ],
       ),
       body: Padding(
         padding: const EdgeInsets.all(AppSpacing.lg),
@@ -999,6 +1567,16 @@ class _RPSInputScreenState extends State<RPSInputScreen> {
                                   ),
                                 const SizedBox(height: AppSpacing.xs),
                                 Text(
+                                  '✓ CPL: $cplDisplay',
+                                  style: const TextStyle(
+                                    fontSize: 11,
+                                    color: AppColors.secondary,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                const SizedBox(height: AppSpacing.xs),
+                                Text(
                                   '✓ CPMK: $cpmkDisplay',
                                   style: const TextStyle(
                                     fontSize: 11,
@@ -1010,16 +1588,6 @@ class _RPSInputScreenState extends State<RPSInputScreen> {
                                 const SizedBox(height: AppSpacing.xs),
                                 Text(
                                   '✓ Sub CPMK: $subCpmkDisplay',
-                                  style: const TextStyle(
-                                    fontSize: 11,
-                                    color: AppColors.secondary,
-                                  ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                                const SizedBox(height: AppSpacing.xs),
-                                Text(
-                                  '✓ CPL: $cplDisplay',
                                   style: const TextStyle(
                                     fontSize: 11,
                                     color: AppColors.secondary,

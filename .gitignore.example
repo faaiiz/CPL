@@ -1,0 +1,17 @@
+# Git ignore file - add this to prevent credentials being uploaded
+.env
+.env.local
+.env.*.local
+.DS_Store
+node_modules/
+build/
+.firebase/
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+*.iml
+.idea/
+.gradle/
+*.apk
+*.aab
+pubspec.lock

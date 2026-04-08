@@ -6,12 +6,14 @@ import '../constants/app_constants.dart';
 class SubCPMKTemplateImportScreen extends StatefulWidget {
   final int matakuliahId;
   final String matakuliahNama;
+  final String? matakuliahKode;
   final VoidCallback? onImportSuccess;
 
   const SubCPMKTemplateImportScreen({
     super.key,
     required this.matakuliahId,
     required this.matakuliahNama,
+    this.matakuliahKode,
     this.onImportSuccess,
   });
 
@@ -120,6 +122,7 @@ class _SubCPMKTemplateImportScreenState
               onPressed: () async {
                 final path = await TemplateService.downloadSubCPMKTemplate(
                   matakuliahNama: widget.matakuliahNama,
+                  kodeMatakuliah: widget.matakuliahKode,
                 );
                 if (!mounted) return;
 

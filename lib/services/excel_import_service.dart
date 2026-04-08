@@ -1,4 +1,6 @@
 import 'dart:io';
+import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:csv/csv.dart';
 import 'package:excel/excel.dart';
 import '../models/nilai_model.dart';
@@ -8,10 +10,36 @@ import '../models/matakuliah_model.dart';
 import '../models/cpl_master_model.dart';
 import '../models/cpmk_model.dart';
 import '../models/sub_cpmk_model.dart';
+import '../models/rps_detail_model.dart';
+import '../models/rps_detail_sub_cpmk_bobot_model.dart';
+import '../models/sub_cpmk_cpmk_mapping_model.dart';
 import 'database_helper.dart';
 
 class ExcelImportService {
   final DatabaseHelper _dbHelper = DatabaseHelper();
+
+  // Learning methods for validation (untuk batch RPS import)
+  // ⚠️ PENULISAN HARUS EXACTLY SAMA (case-sensitive) - tidak ada variasi
+  static const List<String> _validLearningMethods = [
+    'Case Based Learning',
+    'Project Based Learning',
+    'Small Group Discussion',
+    'Discovery Learning',
+    'Contextual Learning',
+    'Contextual Instruction',
+    'Cooperative Learning',
+    'Collaborative Learning',
+  ];
+
+  // Assessment types for validation (untuk batch RPS import)
+  // ⚠️ PENULISAN HARUS EXACTLY SAMA (case-sensitive) - tidak ada variasi
+  // Contoh: "Aktifitas Partisipatif" ✓ (bukan "aktivitas partisipatif" ✗)
+  static const List<String> _validAssessmentTypes = [
+    'Aktifitas Partisipatif',
+    'Hasil Proyek',
+    'Kuis',
+    'Tugas',
+  ];
 
   // Grade mapping dari huruf ke nilai numerik
   static const Map<String, double> _gradeNumerikMap = {
@@ -30,10 +58,18 @@ class ExcelImportService {
   // Kolom D: Nama Matakuliah
   // Kolom E: Grade (A-E)
   // Kolom F: Tahun Ajaran
-  Future<Map<String, dynamic>> importNilaiFromExcel(String filePath) async {
+  Future<Map<String, dynamic>> importNilaiFromExcel(String filePath, {Uint8List? fileBytes, String? fileName}) async {
     try {
-      final file = File(filePath);
-      final content = await file.readAsString();
+      late String content;
+      
+      if (fileBytes != null) {
+        // For web, use bytes
+        content = String.fromCharCodes(fileBytes);
+      } else {
+        // For desktop, use file path
+        final file = File(filePath);
+        content = await file.readAsString();
+      }
       
       // Parse CSV
       final rows = const CsvToListConverter().convert(content);
@@ -142,8 +178,8 @@ class ExcelImportService {
         }
       }
 
-      // Insert semua nilai
-      if (nilaiList.isNotEmpty) {
+      // Insert semua nilai (skip on web platform)
+      if (nilaiList.isNotEmpty && !kIsWeb) {
         await _dbHelper.insertNilaiBatch(nilaiList);
       }
 
@@ -172,13 +208,10 @@ class ExcelImportService {
   // Kolom A: NIM
   // Kolom B: Nama
   // Kolom C: Tahun Masuk
-  Future<Map<String, dynamic>> importMahasiswaFromExcel(String filePath) async {
+  Future<Map<String, dynamic>> importMahasiswaFromExcel(String filePath, {Uint8List? fileBytes, String? fileName}) async {
     try {
-      final file = File(filePath);
-      final content = await file.readAsString();
-      
-      // Parse CSV
-      final rows = const CsvToListConverter().convert(content);
+      // Use the proper file reading method that handles both CSV and Excel
+      final rows = await _readFileData(filePath, fileBytes: fileBytes, fileName: fileName);
 
       final results = <String, dynamic>{
         'success': true,
@@ -224,12 +257,14 @@ class ExcelImportService {
             continue;
           }
 
-          // Check apakah mahasiswa sudah ada
-          final existing = await _dbHelper.getMahasiswaByNim(nim);
-          if (existing != null) {
-            results['errors'].add('Baris $rowNumber: NIM $nim sudah terdaftar');
-            results['failed']++;
-            continue;
+          // Check apakah mahasiswa sudah ada (skip on web)
+          if (!kIsWeb) {
+            final existing = await _dbHelper.getMahasiswaByNim(nim);
+            if (existing != null) {
+              results['errors'].add('Baris $rowNumber: NIM $nim sudah terdaftar');
+              results['failed']++;
+              continue;
+            }
           }
 
           final mahasiswa = Mahasiswa(
@@ -247,8 +282,8 @@ class ExcelImportService {
         }
       }
 
-      // Insert semua mahasiswa
-      if (mahasiswaList.isNotEmpty) {
+      // Insert semua mahasiswa (skip on web platform)
+      if (mahasiswaList.isNotEmpty && !kIsWeb) {
         await _dbHelper.insertMahasiswaBatch(mahasiswaList);
       }
 
@@ -279,13 +314,10 @@ class ExcelImportService {
   // Kolom C: Semester
   // Kolom D: Jenis (wajib/pilihan)
   // Kolom E: SKS
-  Future<Map<String, dynamic>> importMatakuliahFromExcel(String filePath) async {
+  Future<Map<String, dynamic>> importMatakuliahFromExcel(String filePath, {Uint8List? fileBytes, String? fileName}) async {
     try {
-      final file = File(filePath);
-      final content = await file.readAsString();
-      
-      // Parse CSV
-      final rows = const CsvToListConverter().convert(content);
+      // Use the proper file reading method that handles both CSV and Excel
+      final rows = await _readFileData(filePath, fileBytes: fileBytes, fileName: fileName);
 
       final results = <String, dynamic>{
         'success': true,
@@ -341,13 +373,15 @@ class ExcelImportService {
             continue;
           }
 
-          // Check apakah matakuliah sudah ada
-          final existing = await _dbHelper.getMatakuliahByKode(kode);
-          if (existing != null) {
-            results['errors'].add(
-                'Baris $rowNumber: Kode Matakuliah $kode sudah terdaftar');
-            results['failed']++;
-            continue;
+          // Check apakah matakuliah sudah ada (skip on web)
+          if (!kIsWeb) {
+            final existing = await _dbHelper.getMatakuliahByKode(kode);
+            if (existing != null) {
+              results['errors'].add(
+                  'Baris $rowNumber: Kode Matakuliah $kode sudah terdaftar');
+              results['failed']++;
+              continue;
+            }
           }
 
           final matakuliah = Matakuliah(
@@ -367,8 +401,8 @@ class ExcelImportService {
         }
       }
 
-      // Insert semua matakuliah
-      if (matakuliahList.isNotEmpty) {
+      // Insert semua matakuliah (skip on web platform)
+      if (matakuliahList.isNotEmpty && !kIsWeb) {
         await _dbHelper.insertMatakuliahBatch(matakuliahList);
       }
 
@@ -421,16 +455,26 @@ class ExcelImportService {
   }
 
   // Helper method untuk membaca file CSV atau Excel
-  Future<List<List<dynamic>>> _readFileData(String filePath) async {
-    final file = File(filePath);
+  Future<List<List<dynamic>>> _readFileData(String filePath, {Uint8List? fileBytes, String? fileName}) async {
+    // Tentukan nama file untuk mengetahui extension
+    String nameToCheck = fileName ?? filePath;
     
-    if (filePath.toLowerCase().endsWith('.xlsx') || 
-        filePath.toLowerCase().endsWith('.xls')) {
+    late List<List<dynamic>> rows;
+    
+    if (nameToCheck.toLowerCase().endsWith('.xlsx') || 
+        nameToCheck.toLowerCase().endsWith('.xls')) {
       // Baca Excel file
-      var bytes = file.readAsBytesSync();
+      late Uint8List bytes;
+      if (fileBytes != null) {
+        bytes = fileBytes;
+      } else {
+        final file = File(filePath);
+        bytes = file.readAsBytesSync();
+      }
+      
       var excel = Excel.decodeBytes(bytes);
       
-      List<List<dynamic>> rows = [];
+      rows = [];
       for (var table in excel.tables.keys) {
         final sheet = excel.tables[table];
         if (sheet != null) {
@@ -446,8 +490,15 @@ class ExcelImportService {
       return rows;
     } else {
       // Baca CSV file
-      final content = await file.readAsString();
-      final rows = const CsvToListConverter().convert(content);
+      late String content;
+      if (fileBytes != null) {
+        content = String.fromCharCodes(fileBytes);
+      } else {
+        final file = File(filePath);
+        content = await file.readAsString();
+      }
+      
+      rows = const CsvToListConverter().convert(content);
       return rows;
     }
   }
@@ -465,10 +516,10 @@ class ExcelImportService {
   // Kolom I: Nilai UAS (0-100)
   // Kolom J: Tahun Ajaran (contoh: 2024/2025 Ganjil)
   // Kolom K: Semester
-  Future<Map<String, dynamic>> importNilaiDetailFromExcel(String filePath, {String? matakuliahFilter}) async {
+  Future<Map<String, dynamic>> importNilaiDetailFromExcel(String filePath, {String? matakuliahFilter, Uint8List? fileBytes, String? fileName}) async {
     try {
       // Baca file (support CSV dan Excel)
-      final rows = await _readFileData(filePath);
+      final rows = await _readFileData(filePath, fileBytes: fileBytes, fileName: fileName);
 
       final results = <String, dynamic>{
         'success': true,
@@ -670,13 +721,13 @@ class ExcelImportService {
         }
       }
 
-      // Insert semua nilai
-      if (nilaiList.isNotEmpty) {
+      // Insert semua nilai (skip on web platform)
+      if (nilaiList.isNotEmpty && !kIsWeb) {
         await _dbHelper.insertNilaiBatch(nilaiList);
       }
 
-      // 📊 Insert semua nilai komponen
-      if (nilaiKomponenList.isNotEmpty) {
+      // 📊 Insert semua nilai komponen (skip on web platform)
+      if (nilaiKomponenList.isNotEmpty && !kIsWeb) {
         for (final nk in nilaiKomponenList) {
           await _dbHelper.insertNilaiKomponen(
             mahasiswaId: nk.mahasiswaId,
@@ -716,9 +767,9 @@ class ExcelImportService {
   // Format Excel/CSV:
   // Kolom A: Nomor CPL (1-7)
   // Kolom B: Deskripsi CPL
-  Future<Map<String, dynamic>> importCPLFromExcel(String filePath) async {
+  Future<Map<String, dynamic>> importCPLFromExcel(String filePath, {Uint8List? fileBytes, String? fileName}) async {
     try {
-      final rows = await _readFileData(filePath);
+      final rows = await _readFileData(filePath, fileBytes: fileBytes, fileName: fileName);
 
       final results = <String, dynamic>{
         'success': true,
@@ -782,8 +833,8 @@ class ExcelImportService {
         }
       }
 
-      // Insert semua CPL
-      if (cplList.isNotEmpty) {
+      // Insert semua CPL (skip on web platform)
+      if (cplList.isNotEmpty && !kIsWeb) {
         for (var cpl in cplList) {
           await _dbHelper.insertCPLMaster(cpl);
         }
@@ -810,12 +861,15 @@ class ExcelImportService {
   }
 
   // Import CPMK dari file Excel/CSV
-  // Format Excel/CSV:
-  // Kolom A: Nomor CPMK
-  // Kolom B: Deskripsi CPMK
-  Future<Map<String, dynamic>> importCPMKFromExcel(String filePath) async {
+  // Format Excel/CSV (sama dengan Sub CPMK Batch):
+  // Row 1: Nama Mata Kuliah info
+  // Row 2: Kode Mata Kuliah info
+  // Row 3: (empty)
+  // Row 4: Kolom A: Nomor CPMK, Kolom B: Deskripsi CPMK
+  // Row 5+: Data
+  Future<Map<String, dynamic>> importCPMKFromExcel(String filePath, {Uint8List? fileBytes, String? fileName}) async {
     try {
-      final rows = await _readFileData(filePath);
+      final rows = await _readFileData(filePath, fileBytes: fileBytes, fileName: fileName);
 
       final results = <String, dynamic>{
         'success': true,
@@ -834,11 +888,24 @@ class ExcelImportService {
       final cpmkList = <CPMK>[];
       int rowNumber = 1;
 
-      // Lewati header (baris pertama)
-      final dataRows = rows.skip(1).toList();
+      // Skip header rows (baris 1-4: info mata kuliah, info kode, empty, dan column headers)
+      // Find the column header row by looking for "Nomor CPMK" in the first column
+      int dataStartRow = 4; // Default: start dari row 5 (index 4)
+      
+      for (int i = 0; i < rows.length && i < 10; i++) {
+        if (rows[i].isNotEmpty) {
+          final firstCol = rows[i][0]?.toString().trim() ?? '';
+          if (firstCol == 'Nomor CPMK') {
+            dataStartRow = i + 1; // Data starts from next row
+            break;
+          }
+        }
+      }
+
+      final dataRows = rows.skip(dataStartRow).toList();
 
       for (var row in dataRows) {
-        rowNumber++;
+        rowNumber = dataStartRow + (dataRows.indexOf(row)) + 1;
         try {
           if (row.isEmpty) continue;
 
@@ -879,11 +946,26 @@ class ExcelImportService {
         }
       }
 
-      // Insert semua CPMK
-      if (cpmkList.isNotEmpty) {
+      // Insert semua CPMK (skip on web platform) dengan error handling
+      if (cpmkList.isNotEmpty && !kIsWeb) {
+        int insertedCount = 0;
         for (var cpmk in cpmkList) {
-          await _dbHelper.insertCPMK(cpmk);
+          try {
+            await _dbHelper.insertCPMK(cpmk);
+            insertedCount++;
+          } catch (e) {
+            // Handle constraint error
+            final errorMsg = e.toString();
+            if (errorMsg.contains('UNIQUE constraint failed') || 
+                errorMsg.contains('constraint failed')) {
+              results['errors'].add('${cpmk.kodeCPMK}: Sudah ada di database (duplikat)');
+            } else {
+              results['errors'].add('${cpmk.kodeCPMK}: ${e.toString()}');
+            }
+            results['failed']++;
+          }
         }
+        results['imported'] = insertedCount;
       }
 
       if (results['failed'] == 0) {
@@ -911,10 +993,12 @@ class ExcelImportService {
   /// Kolom B: Deskripsi Sub CPMK
   Future<Map<String, dynamic>> importSubCPMKFromExcel(
     String filePath,
-    int matakuliahId,
-  ) async {
+    int matakuliahId, {
+    Uint8List? fileBytes,
+    String? fileName,
+  }) async {
     try {
-      final rows = await _readFileData(filePath);
+      final rows = await _readFileData(filePath, fileBytes: fileBytes, fileName: fileName);
 
       final results = <String, dynamic>{
         'success': true,
@@ -969,11 +1053,26 @@ class ExcelImportService {
         }
       }
 
-      // Insert semua Sub CPMK
-      if (subCpmkList.isNotEmpty) {
+      // Insert semua Sub CPMK (skip on web platform) dengan error handling
+      if (subCpmkList.isNotEmpty && !kIsWeb) {
+        int insertedCount = 0;
         for (var subCpmk in subCpmkList) {
-          await _dbHelper.insertSubCPMK(subCpmk);
+          try {
+            await _dbHelper.insertSubCPMK(subCpmk);
+            insertedCount++;
+          } catch (e) {
+            // Handle constraint error
+            final errorMsg = e.toString();
+            if (errorMsg.contains('UNIQUE constraint failed') || 
+                errorMsg.contains('constraint failed')) {
+              results['errors'].add('${subCpmk.kodeSubCPMK}: Sudah ada di database (duplikat)');
+            } else {
+              results['errors'].add('${subCpmk.kodeSubCPMK}: ${e.toString()}');
+            }
+            results['failed']++;
+          }
         }
+        results['imported'] = insertedCount;
       }
 
       if (results['failed'] == 0) {
@@ -991,6 +1090,550 @@ class ExcelImportService {
         'message': 'Error: ${e.toString()}',
         'imported': 0,
         'failed': 0,
+        'errors': [e.toString()],
+      };
+    }
+  }
+
+  /// Import Sub CPMK dari multiple files
+  /// Setiap file harus memiliki kode matakuliah di sel B2 (untuk validasi)
+  /// Format: Row 1 = Nama Mata Kuliah, Row 2 = Kode Mata Kuliah, Row 4 = Column Headers, Row 5+ = Data
+  Future<Map<String, dynamic>> importSubCPMKBatchMultipleFiles(
+    List<String> filePaths,
+  ) async {
+    try {
+      final overallResults = <String, dynamic>{
+        'success': true,
+        'message': '',
+        'totalImported': 0,
+        'totalFailed': 0,
+        'fileResults': <Map<String, dynamic>>[],
+        'errors': <String>[],
+      };
+
+      // Proses setiap file
+      for (final filePath in filePaths) {
+        try {
+          final rows = await _readFileData(filePath);
+          
+          if (rows.isEmpty) {
+            overallResults['fileResults'].add({
+              'fileName': filePath.split('/').last,
+              'success': false,
+              'message': 'File kosong',
+              'matakuliah': null,
+              'imported': 0,
+            });
+            overallResults['totalFailed']++;
+            continue;
+          }
+
+          // Extract kode matakuliah dari B2 (row 1, column 1) untuk validasi
+          String? kodeMatakuliah;
+          if (rows.length > 1 && rows[1].length > 1) {
+            kodeMatakuliah = rows[1][1]?.toString().trim();
+          }
+
+          if (kodeMatakuliah == null || kodeMatakuliah.isEmpty) {
+            overallResults['fileResults'].add({
+              'fileName': filePath.split('/').last,
+              'success': false,
+              'message': 'Kode Matakuliah tidak ditemukan di sel B2',
+              'matakuliah': null,
+              'imported': 0,
+            });
+            overallResults['totalFailed']++;
+            continue;
+          }
+
+          // Cari matakuliah berdasarkan KODE (bukan nama)
+          final matakuliah = await _dbHelper.getMatakuliahByKode(kodeMatakuliah);
+          
+          if (matakuliah == null) {
+            overallResults['fileResults'].add({
+              'fileName': filePath.split('/').last,
+              'success': false,
+              'message': 'Matakuliah dengan kode "$kodeMatakuliah" tidak ditemukan di database',
+              'matakuliah': kodeMatakuliah,
+              'imported': 0,
+            });
+            overallResults['totalFailed']++;
+            continue;
+          }
+
+          // Import Sub CPMK untuk matakuliah ini
+          final subCpmkList = <SubCPMK>[];
+          
+          // Detect data start row - cari kolom header "Kode Sub CPMK"
+          int dataStartRow = 4; // Default
+          for (int i = 0; i < rows.length && i < 10; i++) {
+            if (rows[i].isNotEmpty) {
+              final firstCol = rows[i][0]?.toString().trim() ?? '';
+              if (firstCol.toLowerCase().contains('kode') && firstCol.toLowerCase().contains('sub')) {
+                dataStartRow = i + 1; // Data starts after header
+                break;
+              }
+            }
+          }
+          
+          for (int i = dataStartRow; i < rows.length; i++) {
+            final row = rows[i];
+            if (row.isEmpty || row[0] == null) continue;
+
+            try {
+              final kodeSubCpmk = row[0]?.toString().trim() ?? '';
+              final deskripsi = row[1]?.toString().trim() ?? '';
+
+              // Validasi: kode sub CPMK harus bukan kosong dan harus mengandung "SUB-CPMK"
+              if (kodeSubCpmk.isEmpty || deskripsi.isEmpty) {
+                continue;
+              }
+              
+              // Skip jika kodeSubCpmk tidak dalam format yang benar (harus mengandung "SUB-CPMK" atau angka)
+              if (!kodeSubCpmk.toUpperCase().contains('SUB-CPMK') && 
+                  !kodeSubCpmk.toUpperCase().contains('SUB') &&
+                  int.tryParse(kodeSubCpmk) != null) {
+                // Jika hanya angka, skip (kemungkinan bukan data Sub CPMK)
+                continue;
+              }
+
+              final subCpmk = SubCPMK(
+                matakuliahId: matakuliah.id!,
+                kodeSubCPMK: kodeSubCpmk,
+                deskripsi: deskripsi,
+                createdAt: DateTime.now(),
+              );
+
+              subCpmkList.add(subCpmk);
+            } catch (e) {
+              // Skip row yang error
+              continue;
+            }
+          }
+
+          // Simpan semua Sub CPMK dengan error handling per item
+          int successCount = 0;
+          List<String> insertErrors = [];
+          
+          if (subCpmkList.isNotEmpty) {
+            for (var subCpmk in subCpmkList) {
+              try {
+                await _dbHelper.insertSubCPMK(subCpmk);
+                successCount++;
+              } catch (e) {
+                // Handle constraint error - check jika sudah ada data yang sama
+                final errorMsg = e.toString();
+                if (errorMsg.contains('UNIQUE constraint failed') || 
+                    errorMsg.contains('constraint failed')) {
+                  insertErrors.add('${subCpmk.kodeSubCPMK}: Sudah ada di database');
+                } else {
+                  insertErrors.add('${subCpmk.kodeSubCPMK}: ${e.toString()}');
+                }
+              }
+            }
+          }
+
+          final errorMsg = insertErrors.isNotEmpty ? '\nError: ${insertErrors.join(', ')}' : '';
+          overallResults['fileResults'].add({
+            'fileName': filePath.split('/').last,
+            'success': successCount > 0,
+            'message': '$successCount Sub CPMK berhasil diimport${insertErrors.isNotEmpty ? ' (${insertErrors.length} duplikat/error)$errorMsg' : ''}',
+            'matakuliah': kodeMatakuliah,
+            'imported': successCount,
+          });
+
+          overallResults['totalImported'] += successCount;
+        } catch (e) {
+          overallResults['fileResults'].add({
+            'fileName': filePath.split('/').last,
+            'success': false,
+            'message': 'Error: ${e.toString()}',
+            'matakuliah': null,
+            'imported': 0,
+          });
+          overallResults['totalFailed']++;
+        }
+      }
+
+      // Set pesan ringkasan
+      if (overallResults['totalFailed'] == 0) {
+        overallResults['message'] =
+            '✓ ${overallResults['totalImported']} Sub CPMK berhasil diimport dari ${filePaths.length} file';
+      } else {
+        overallResults['message'] =
+            '${overallResults['totalImported']} Sub CPMK berhasil, ${overallResults['totalFailed']} file gagal diproses';
+        if (overallResults['totalImported'] == 0) {
+          overallResults['success'] = false;
+        }
+      }
+
+      return overallResults;
+    } catch (e) {
+      return {
+        'success': false,
+        'message': 'Error: ${e.toString()}',
+        'totalImported': 0,
+        'totalFailed': 0,
+        'fileResults': [],
+        'errors': [e.toString()],
+      };
+    }
+  }
+
+  /// Import RPS dari multiple files
+  /// Setiap file harus memiliki kode matakuliah di sel B2
+  /// Format: Row 1 = Header (Nama Mata Kuliah), Row 2 = Kode Matakuliah, Row 4 = Column Headers, Row 5+ = Data
+  Future<Map<String, dynamic>> importRPSBatchMultipleFiles(
+    List<String> filePaths,
+  ) async {
+    try {
+      final overallResults = <String, dynamic>{
+        'success': true,
+        'message': '',
+        'totalImported': 0,
+        'totalFailed': 0,
+        'fileResults': <Map<String, dynamic>>[],
+        'errors': <String>[],
+      };
+
+      // Proses setiap file
+      for (final filePath in filePaths) {
+        try {
+          final rows = await _readFileData(filePath);
+          final fileName = filePath.split('/').last;
+          
+          if (rows.isEmpty) {
+            overallResults['fileResults'].add({
+              'fileName': fileName,
+              'success': false,
+              'message': 'File kosong',
+              'matakuliah': null,
+              'imported': 0,
+            });
+            overallResults['totalFailed']++;
+            continue;
+          }
+
+          // Extract kode matakuliah dari B2 (row 1, column 1)
+          String? kodeMatakuliah;
+          if (rows.length > 1 && rows[1].length > 1) {
+            kodeMatakuliah = rows[1][1]?.toString().trim();
+          }
+
+          if (kodeMatakuliah == null || kodeMatakuliah.isEmpty) {
+            overallResults['fileResults'].add({
+              'fileName': fileName,
+              'success': false,
+              'message': 'Kode Matakuliah tidak ditemukan di sel B2',
+              'matakuliah': null,
+              'imported': 0,
+            });
+            overallResults['totalFailed']++;
+            continue;
+          }
+
+          // Cari matakuliah yang sesuai dari database
+          final matakuliah = await _dbHelper.getMatakuliahByKode(kodeMatakuliah);
+          
+          if (matakuliah == null) {
+            overallResults['fileResults'].add({
+              'fileName': fileName,
+              'success': false,
+              'message': 'Matakuliah dengan kode "$kodeMatakuliah" tidak ditemukan di database',
+              'matakuliah': kodeMatakuliah,
+              'imported': 0,
+            });
+            overallResults['totalFailed']++;
+            continue;
+          }
+
+          // Validasi terlebih dahulu sebelum import
+          final validationErrors = <String>[];
+          final rpsDataList = <RPSDetail>[];
+
+          // Data mulai dari row 4 (index 4) - row 5 di Excel
+          final dataStartRow = 4;
+          int excelLineNumber = dataStartRow + 1; // Untuk display yang sesuai dengan Excel
+          
+          for (int i = dataStartRow; i < rows.length; i++) {
+            final row = rows[i];
+            if (row.isEmpty || row[0] == null) {
+              excelLineNumber++;
+              continue;
+            }
+
+            try {
+              // Kolom sesuai header: Kode MK, Nama MK, Minggu Ke, Topik, Metode, Bobot, CPMK, Sub CPMK, CPL, Jenis Penilaian
+              final mingguKeStr = row[2]?.toString().trim() ?? '';
+              final topik = row[3]?.toString().trim() ?? '';
+              final metodeAjar = row[4]?.toString().trim() ?? '';
+              final bobotStr = row[5]?.toString().trim() ?? '';
+              final kodesCPMK = row[6]?.toString().trim() ?? '';
+              final kodesSubCPMK = row[7]?.toString().trim() ?? '';
+              final kodesCPL = row[8]?.toString().trim() ?? '';
+              final jenisNilaiStr = row[9]?.toString().trim() ?? '';
+
+              if (mingguKeStr.isEmpty || topik.isEmpty) {
+                excelLineNumber++;
+                continue;
+              }
+
+              // Validasi minggu
+              final mingguKe = int.tryParse(mingguKeStr);
+              if (mingguKe == null || mingguKe < 1 || mingguKe > 16) {
+                validationErrors.add(
+                    'Baris $excelLineNumber: Minggu Ke harus berupa angka antara 1-16 (nilai: "$mingguKeStr")');
+                excelLineNumber++;
+                continue;
+              }
+
+              // Check if UTS/UAS
+              final isUTSorUAS = mingguKe == 8 || mingguKe == 16;
+
+              // Validasi metode ajar - HARUS diisi KECUALI untuk minggu 8 (UTS) dan 16 (UAS)
+              if (!isUTSorUAS && (metodeAjar.isEmpty || metodeAjar == '-')) {
+                validationErrors.add(
+                    'Baris $excelLineNumber (Minggu $mingguKe): Metode pembelajaran HARUS diisi');
+                excelLineNumber++;
+                continue;
+              }
+
+              if (metodeAjar.isNotEmpty && metodeAjar != '-' && !_validLearningMethods.contains(metodeAjar)) {
+                validationErrors.add(
+                    'Baris $excelLineNumber (Minggu $mingguKe): Metode "$metodeAjar" tidak valid.\n'
+                    '✓ Gunakan: ${_validLearningMethods.join(", ")}');
+                excelLineNumber++;
+                continue;
+              }
+
+              // Validasi Jenis Penilaian - HARUS diisi KECUALI untuk minggu 8 (UTS) dan 16 (UAS)
+              if (!isUTSorUAS && (jenisNilaiStr.isEmpty || jenisNilaiStr == '-')) {
+                validationErrors.add(
+                    'Baris $excelLineNumber (Minggu $mingguKe): Jenis Penilaian HARUS diisi');
+                excelLineNumber++;
+                continue;
+              }
+
+              if (jenisNilaiStr.isNotEmpty && jenisNilaiStr != '-' && !_validAssessmentTypes.contains(jenisNilaiStr)) {
+                validationErrors.add(
+                    'Baris $excelLineNumber (Minggu $mingguKe): Penilaian "$jenisNilaiStr" tidak valid.\n'
+                    '✓ Gunakan: ${_validAssessmentTypes.join(", ")}');
+                excelLineNumber++;
+                continue;
+              }
+
+              // Validasi bobot (optional)
+              double? bobot;
+              if (bobotStr.isNotEmpty) {
+                bobot = double.tryParse(bobotStr);
+                if (bobot == null || bobot < 0 || bobot > 100) {
+                  validationErrors.add(
+                      'Baris $excelLineNumber (Minggu $mingguKe): Bobot harus angka 0-100');
+                  excelLineNumber++;
+                  continue;
+                }
+              } else {
+                bobot = 0;
+              }
+
+              // Parse CPMK codes (optional)
+              List<int>? cpmkIds;
+              if (kodesCPMK.isNotEmpty) {
+                cpmkIds = [];
+                final cpmkCodes = kodesCPMK.split(';').map((c) => c.trim()).toList();
+                for (var code in cpmkCodes) {
+                  if (code.isEmpty) continue;
+                  var cpmk = await _dbHelper.getCPMKByKode(code);
+                  if (cpmk == null) {
+                    // Auto-create CPMK if not found
+                    cpmk = CPMK(
+                      kodeCPMK: code,
+                      deskripsi: 'Auto-created dari RPS import: $code',
+                      matakuliahId: 0, // program-level CPMK
+                      createdAt: DateTime.now(),
+                    );
+                    final createdId = await _dbHelper.insertCPMK(cpmk);
+                    cpmkIds.add(createdId);
+                  } else {
+                    cpmkIds.add(cpmk.id!);
+                  }
+                }
+                if (cpmkIds.isEmpty) cpmkIds = null;
+              }
+
+              // Parse Sub CPMK codes (optional)
+              List<int>? subCpmkIds;
+              if (kodesSubCPMK.isNotEmpty) {
+                subCpmkIds = [];
+                final subCpmkCodes = kodesSubCPMK.split(';').map((c) => c.trim()).toList();
+                for (var code in subCpmkCodes) {
+                  if (code.isEmpty) continue;
+                  final allSubCpmks = await _dbHelper.getSubCPMKByMatakuliah(matakuliah.id!);
+                  SubCPMK? foundSubCpmk;
+                  try {
+                    foundSubCpmk = allSubCpmks.firstWhere(
+                      (sc) => sc.kodeSubCPMK == code,
+                    );
+                  } catch (e) {
+                    // Auto-create Sub CPMK if not found
+                    foundSubCpmk = SubCPMK(
+                      matakuliahId: matakuliah.id!,
+                      kodeSubCPMK: code,
+                      deskripsi: 'Auto-created dari RPS import: $code',
+                      createdAt: DateTime.now(),
+                    );
+                    final createdId = await _dbHelper.insertSubCPMK(foundSubCpmk);
+                    foundSubCpmk = foundSubCpmk.copyWith(id: createdId);
+                  }
+                  subCpmkIds.add(foundSubCpmk.id!);
+                }
+                if (subCpmkIds.isEmpty) subCpmkIds = null;
+              }
+
+              // Parse CPL codes (optional)
+              List<int>? cplIds;
+              if (kodesCPL.isNotEmpty) {
+                cplIds = [];
+                try {
+                  final codeList = kodesCPL.split(';').map((c) => c.trim()).toList();
+                  final allCPLs = await _dbHelper.getAllCPLMaster();
+                  for (var code in codeList) {
+                    if (code.isEmpty) continue;
+                    try {
+                      final cpl = allCPLs.firstWhere(
+                        (c) => c.kodeCPL == code,
+                      );
+                      cplIds.add(cpl.id!);
+                    } catch (e) {
+                      // CPL code not found, skip
+                    }
+                  }
+                  if (cplIds.isEmpty) cplIds = null;
+                } catch (e) {
+                  // Error parsing CPL codes, skip
+                }
+              }
+
+              // Prepare RPS data
+              final jenisNilai = jenisNilaiStr.isEmpty || jenisNilaiStr == '-' ? null : jenisNilaiStr;
+              final finalMetodeAjar = (metodeAjar.isEmpty || metodeAjar == '-') ? '' : metodeAjar;
+
+              final rpsDetail = RPSDetail(
+                matakuliahId: matakuliah.id!,
+                mingguKe: mingguKe,
+                topik: topik,
+                metodeAjar: finalMetodeAjar,
+                bobot: bobot,
+                cpmkIds: cpmkIds,
+                subCpmkIds: subCpmkIds,
+                cplIds: cplIds,
+                jenisNilai: jenisNilai,
+                createdAt: DateTime.now(),
+              );
+
+              rpsDataList.add(rpsDetail);
+            } catch (e) {
+              validationErrors.add('Baris $excelLineNumber: Error parsing - ${e.toString()}');
+            }
+            excelLineNumber++;
+          }
+
+          // Jika ada validation errors, jangan import
+          if (validationErrors.isNotEmpty) {
+            final errorMsg = '${validationErrors.length} baris memiliki error:\n' +
+                validationErrors.take(5).join('\n') +
+                (validationErrors.length > 5 ? '\n... dan ${validationErrors.length - 5} error lainnya' : '');
+            
+            overallResults['fileResults'].add({
+              'fileName': fileName,
+              'success': false,
+              'message': 'Import GAGAL: $errorMsg',
+              'matakuliah': matakuliah.nama,
+              'imported': 0,
+              'errors': validationErrors,
+            });
+            overallResults['totalFailed']++;
+            overallResults['errors'].addAll(validationErrors);
+            continue;
+          }
+
+          // Validasi passed, now import
+          // Hapus RPS lama untuk matakuliah ini sebelum import data baru
+          await _dbHelper.deleteRPSDetailByMatakuliah(matakuliah.id!);
+
+          int importCount = 0;
+          for (var rpsDetail in rpsDataList) {
+            try {
+              final rpsDetailId = await _dbHelper.insertRPSDetail(rpsDetail);
+
+              // Jika ada Sub CPMK, simpan mapping
+              if (rpsDetail.subCpmkIds != null && rpsDetail.subCpmkIds!.isNotEmpty && rpsDetail.bobot != null) {
+                for (var subCpmkId in rpsDetail.subCpmkIds!) {
+                  try {
+                    final rpsBobotSubCpmk = RPSDetailSubCPMKBobot(
+                      rpsDetailId: rpsDetailId,
+                      subCpmkId: subCpmkId,
+                      bobot: rpsDetail.bobot!,
+                      createdAt: DateTime.now(),
+                    );
+                    await _dbHelper.insertRPSDetailSubCPMKBobot(rpsBobotSubCpmk);
+                  } catch (e) {
+                    // Skip jika gagal insert mapping
+                  }
+                }
+              }
+
+              importCount++;
+            } catch (e) {
+              // Skip row yang error saat insert
+              continue;
+            }
+          }
+
+          // Auto-create Sub-CPMK → CPMK mapping
+          await _createSubCPMKtoCPMKMappings(matakuliah.id!);
+
+          overallResults['fileResults'].add({
+            'fileName': fileName,
+            'success': true,
+            'message': '✓ $importCount RPS berhasil diimport',
+            'matakuliah': matakuliah.nama,
+            'imported': importCount,
+          });
+
+          overallResults['totalImported'] += importCount;
+        } catch (e) {
+          overallResults['fileResults'].add({
+            'fileName': filePath.split('/').last,
+            'success': false,
+            'message': 'Error: ${e.toString()}',
+            'matakuliah': null,
+            'imported': 0,
+          });
+          overallResults['totalFailed']++;
+        }
+      }
+
+      // Set pesan ringkasan
+      if (overallResults['totalFailed'] == 0) {
+        overallResults['message'] =
+            '✓ ${overallResults['totalImported']} RPS berhasil diimport dari ${filePaths.length} file';
+      } else {
+        overallResults['message'] =
+            '${overallResults['totalImported']} RPS berhasil, ${overallResults['totalFailed']} file gagal diproses';
+        if (overallResults['totalImported'] == 0) {
+          overallResults['success'] = false;
+        }
+      }
+
+      return overallResults;
+    } catch (e) {
+      return {
+        'success': false,
+        'message': 'Error: ${e.toString()}',
+        'totalImported': 0,
+        'totalFailed': 0,
+        'fileResults': [],
         'errors': [e.toString()],
       };
     }
@@ -1031,6 +1674,78 @@ class ExcelImportService {
       return [];
     } catch (e) {
       return ['Error validasi: ${e.toString()}'];
+    }
+  }
+
+  /// Helper method untuk auto-create Sub-CPMK → CPMK mapping
+  Future<void> _createSubCPMKtoCPMKMappings(int matakuliahId) async {
+    try {
+      // Get all Sub-CPMK for this matakuliah
+      final subCpmkList = await _dbHelper.getSubCPMKByMatakuliah(matakuliahId);
+      
+      if (subCpmkList.isEmpty) {
+        print('[RPS Batch Import] No Sub-CPMK found for matakuliah $matakuliahId');
+        return;
+      }
+
+      // Get all CPMK (program-level)
+      final cpmkList = await _dbHelper.getAllCPMK();
+      
+      print('[RPS Batch Import] Processing ${subCpmkList.length} Sub-CPMK for mapping');
+
+      // For each Sub-CPMK, find matching CPMK
+      for (final subCpmk in subCpmkList) {
+        if (subCpmk.id == null) continue;
+
+        // Extract number from SUB-CPMK.X (e.g., "1" from "SUB-CPMK.1")
+        String subCpmkCode = subCpmk.kodeSubCPMK.trim();
+        String subCpmkNumber = subCpmkCode.replaceFirst(RegExp(r'SUB-CPMK\.'), '');
+        
+        print('[RPS Batch Import] Sub-CPMK: $subCpmkCode → Looking for CPMK.$subCpmkNumber');
+
+        // Find matching CPMK with same number
+        CPMK? matchedCpmk;
+        for (final cpmk in cpmkList) {
+          String cpmkCode = cpmk.kodeCPMK.trim();
+          if (cpmkCode == 'CPMK.$subCpmkNumber') {
+            matchedCpmk = cpmk;
+            break;
+          }
+        }
+
+        if (matchedCpmk != null && matchedCpmk.id != null) {
+          // Check if mapping already exists
+          final existingMapping = await _dbHelper.getSubCPMKCPMKMappingSingle(
+            subCpmk.id!,
+            matchedCpmk.id!,
+          );
+
+          if (existingMapping == null) {
+            // Create mapping with 100% bobot
+            final now = DateTime.now();
+            final mapping = SubCPMKCPMKMapping(
+              subCpmkId: subCpmk.id!,
+              cpmkId: matchedCpmk.id!,
+              bobot: 100.0,
+              createdAt: now,
+              updatedAt: now,
+            );
+            
+            await _dbHelper.insertSubCPMKCPMKMapping(mapping);
+
+            print('[RPS Batch Import] ✓ Mapped ${subCpmk.kodeSubCPMK} → ${matchedCpmk.kodeCPMK}');
+          } else {
+            print('[RPS Batch Import] Mapping already exists: ${subCpmk.kodeSubCPMK} → ${matchedCpmk.kodeCPMK}');
+          }
+        } else {
+          print('[RPS Batch Import] ⚠ No matching CPMK.$subCpmkNumber found for ${subCpmk.kodeSubCPMK}');
+        }
+      }
+
+      print('[RPS Batch Import] Sub-CPMK → CPMK mapping creation completed');
+    } catch (e) {
+      print('[RPS Batch Import] Error creating Sub-CPMK → CPMK mappings: $e');
+      // Don't rethrow - allow import to continue even if mapping fails
     }
   }
 }

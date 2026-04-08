@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'constants/app_constants.dart';
@@ -26,19 +27,22 @@ void main() async {
   try {
     WidgetsFlutterBinding.ensureInitialized();
     print('✓ WidgetsFlutterBinding initialized');
-
+    
     // Initialize date formatting for Indonesian locale
     await initializeDateFormatting('id_ID', null);
     print('✓ Date formatting initialized for id_ID locale');
     
-    // Initialize sqflite for desktop
-    try {
-      sqfliteFfiInit();
-      databaseFactory = databaseFactoryFfi;
-      print('✓ SQLite FFI initialized');
-    } catch (e) {
-      print('⚠️  Warning: SQLite FFI init failed, falling back to default: $e');
-      // Biarkan lanjut dengan factory default
+    // Initialize sqflite for desktop only (not web)
+    if (!kIsWeb) {
+      try {
+        sqfliteFfiInit();
+        databaseFactory = databaseFactoryFfi;
+        print('✓ SQLite FFI initialized');
+      } catch (e) {
+        print('⚠️  Warning: SQLite FFI init failed, falling back to default: $e');
+      }
+    } else {
+      print('✓ Web platform detected - Using SQLite');
     }
     
     // Set up Flutter error handler
@@ -48,11 +52,10 @@ void main() async {
     };
     
     runApp(const MyApp());
-    print('✓ App started');
+    print('✓ App started (Offline Mode)');
   } catch (e, stackTrace) {
     print('❌ Critical error during initialization: $e');
     print(stackTrace);
-    // Tetap tampilkan app dengan error screen
     runApp(ErrorApp(error: e.toString(), stackTrace: stackTrace.toString()));
   }
 }

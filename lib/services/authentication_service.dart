@@ -1,9 +1,17 @@
+import 'package:flutter/foundation.dart';
 import 'package:crypto/crypto.dart';
 import '../models/user_model.dart';
 import 'database_helper.dart';
 
 class AuthenticationService {
   final DatabaseHelper _dbHelper = DatabaseHelper();
+
+  /// Test/Development credentials untuk WEB
+  static const Map<String, Map<String, String>> _devCredentials = {
+    'admin': {'password': 'Admin123', 'role': 'admin', 'nama': 'Administrator'},
+    'dosen': {'password': 'Dosen123', 'role': 'dosen', 'nama': 'Dosen Test'},
+    'mhs': {'password': 'Student123', 'role': 'mahasiswa', 'nama': 'Mahasiswa Test', 'nim': '12345'},
+  };
 
   // Hash password menggunakan SHA-256
   String _hashPassword(String password) {
@@ -13,6 +21,12 @@ class AuthenticationService {
   // Login user
   Future<User?> login(String username, String password) async {
     try {
+      // For WEB: Use development credentials (no SQLite available)
+      if (kIsWeb) {
+        return _webLogin(username, password);
+      }
+
+      // For DESKTOP: Use SQLite database
       final user = await _dbHelper.getUserByUsername(username);
       
       if (user == null) {
@@ -31,9 +45,37 @@ class AuthenticationService {
 
       return user;
     } catch (e) {
-        // TODO: Replace with logging framework
+      print('❌ Login error: $e');
       return null;
     }
+  }
+
+  /// Web login menggunakan dev credentials
+  User? _webLogin(String username, String password) {
+    print('🌐 WEB Login attempt: $username');
+    
+    if (!_devCredentials.containsKey(username)) {
+      print('❌ User not found: $username');
+      return null;
+    }
+
+    final devUser = _devCredentials[username]!;
+    if (devUser['password'] != password) {
+      print('❌ Password incorrect for: $username');
+      return null;
+    }
+
+    print('✓ WEB Login success: $username');
+    return User(
+      id: username.hashCode,
+      username: username,
+      password: _hashPassword(password),
+      role: devUser['role']!,
+      nama: devUser['nama']!,
+      nim: devUser['nim'],
+      isActive: true,
+      createdAt: DateTime.now(),
+    );
   }
 
   // Register user baru (hanya untuk admin)
@@ -72,6 +114,11 @@ class AuthenticationService {
   // Update password
   Future<bool> updatePassword(int userId, String oldPassword, String newPassword) async {
     try {
+      // Skip for web
+      if (kIsWeb) {
+        return false;
+      }
+      
       // Get user by id
       final users = await _dbHelper.getAllUsers();
       final user = users.firstWhere((u) => u.id == userId);
@@ -91,49 +138,32 @@ class AuthenticationService {
       await _dbHelper.updateUser(updatedUser);
       return true;
     } catch (e) {
-        // TODO: Replace with logging framework
+      print('❌ Update password error: $e');
       return false;
     }
   }
 
-  // Validasi password strength
-  bool isPasswordStrong(String password) {
-    if (password.length < 6) return false;
-    if (!password.contains(RegExp(r'[A-Z]'))) return false; // At least one uppercase
-    if (!password.contains(RegExp(r'[0-9]'))) return false; // At least one number
-    return true;
-  }
-
-  // Get user by id
-  Future<User?> getUserById(int id) async {
-    try {
-      final users = await _dbHelper.getAllUsers();
-      return users.firstWhere((user) => user.id == id);
-    } catch (e) {
-      return null;
-    }
-  }
-
-  // Check if username exists
-  Future<bool> isUsernameExists(String username) async {
-    final user = await _dbHelper.getUserByUsername(username);
-    return user != null;
-  }
-
   // Initialize admin user
   Future<void> initializeAdminUser() async {
+    if (kIsWeb) {
+      print('✓ WEB platform - Using dev credentials');
+      return;
+    }
+    
     try {
       final existingAdmin = await _dbHelper.getUserByUsername('admin');
       if (existingAdmin == null) {
+        print('📝 Creating default admin user...');
         await registerUser(
           username: 'admin',
           password: 'Admin123',
           role: 'admin',
           nama: 'Administrator',
         );
+        print('✓ Admin user created');
       }
     } catch (e) {
-        // TODO: Replace with logging framework
+      print('⚠️  Error initializing admin: $e');
     }
   }
 
@@ -149,7 +179,7 @@ class AuthenticationService {
       await _dbHelper.updateUser(deactivatedUser);
       return true;
     } catch (e) {
-        // TODO: Replace with logging framework
+      print('❌ Deactivate user error: $e');
       return false;
     }
   }
@@ -166,8 +196,36 @@ class AuthenticationService {
       await _dbHelper.updateUser(activatedUser);
       return true;
     } catch (e) {
-        // TODO: Replace with logging framework
+      print('❌ Activate user error: $e');
       return false;
     }
+  }
+
+  // Validasi password strength
+  bool isPasswordStrong(String password) {
+    if (password.length < 6) return false;
+    if (!password.contains(RegExp(r'[A-Z]'))) return false;
+    if (!password.contains(RegExp(r'[0-9]'))) return false;
+    return true;
+  }
+
+  // Get user by id
+  Future<User?> getUserById(int id) async {
+    try {
+      final users = await _dbHelper.getAllUsers();
+      return users.firstWhere((user) => user.id == id);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // Check if username exists
+  Future<bool> isUsernameExists(String username) async {
+    if (kIsWeb) {
+      return _devCredentials.containsKey(username);
+    }
+    
+    final user = await _dbHelper.getUserByUsername(username);
+    return user != null;
   }
 }

@@ -119,6 +119,9 @@ class _MatakuliahTemplateImportScreenState
                           duration: Duration(seconds: 3),
                         ),
                       );
+                      // 🎯 Pop screen dengan nilai true untuk indicate import success
+                      // Parent (admin_dashboard_screen) akan reload data
+                      Navigator.pop(context, true);
                     },
                   ),
                 );

@@ -11,6 +11,7 @@ import '../services/rps_pdf_generator.dart';
 import '../services/obe_calculation_helper.dart';
 import './cpmk_master_screen.dart';
 import './excel_import_screen.dart';
+import './nilai_batch_import_screen.dart';
 
 enum AdminMenuType {
   home,
@@ -19,6 +20,7 @@ enum AdminMenuType {
   hitungCPL,
   export,
   import,
+  batchNilaiImport,
   inputRPS,
   kelolaAdditional,
   assessmentOutcomes,
@@ -45,6 +47,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   // 🎯 Cache untuk performa
   DateTime? _lastStatisticsRefresh;
   static const _refreshInterval = Duration(minutes: 5);
+  
+  // 🎯 GlobalKeys untuk embedded content widgets - untuk refresh data setelah import
+  final _mahasiswaContentKey = GlobalKey<_EmbeddedMahasiswaContentState>();
+  final _matakuliahContentKey = GlobalKey<_EmbeddedMatakuliahContentState>();
 
   @override
   void initState() {
@@ -84,6 +90,28 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     final now = DateTime.now();
     if (_lastStatisticsRefresh == null || 
         now.difference(_lastStatisticsRefresh!).compareTo(_refreshInterval) > 0) {
+      _loadStatistics();
+    }
+  }
+  
+  // 🎯 Handler untuk import mahasiswa - dengan auto refresh setelah import
+  Future<void> _handleMahasiswaImportClick() async {
+    final result = await Navigator.pushNamed(context, '/mahasiswa_template_import');
+    // Jika import berhasil (return true), refresh data mahasiswa
+    if (result == true && mounted) {
+      _mahasiswaContentKey.currentState?.refreshData();
+      // Juga refresh statistics
+      _loadStatistics();
+    }
+  }
+  
+  // 🎯 Handler untuk import matakuliah - dengan auto refresh setelah import
+  Future<void> _handleMatakuliahImportClick() async {
+    final result = await Navigator.pushNamed(context, '/matakuliah_template_import');
+    // Jika import berhasil (return true), refresh data matakuliah
+    if (result == true && mounted) {
+      _matakuliahContentKey.currentState?.refreshData();
+      // Juga refresh statistics
       _loadStatistics();
     }
   }
@@ -290,20 +318,26 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         // 0: home
         _buildHomeContent(),
         // 1: mahasiswa
-        _EmbeddedMahasiswaContent(dbHelper: _dbHelper),
+        _EmbeddedMahasiswaContent(key: _mahasiswaContentKey, dbHelper: _dbHelper),
         // 2: matakuliah
-        _EmbeddedMatakuliahContent(dbHelper: _dbHelper),
+        _EmbeddedMatakuliahContent(key: _matakuliahContentKey, dbHelper: _dbHelper),
         // 3: hitungCPL
         _EmbeddedHitungCPLContent(context: context),
         // 4: export
         _EmbeddedExportContent(context: context),
         // 5: import
-        _EmbeddedImportContent(context: context),
-        // 6: inputRPS
+        _EmbeddedImportContent(
+          context: context,
+          onMahasiswaImport: _handleMahasiswaImportClick,
+          onMatakuliahImport: _handleMatakuliahImportClick,
+        ),
+        // 6: batchNilaiImport
+        const NilaiBatchImportScreen(),
+        // 7: inputRPS
         _EmbeddedInputRPSContent(context: context),
-        // 7: kelolaAdditional
+        // 8: kelolaAdditional
         _buildKelolaAdditionalContent(),
-        // 8: assessmentOutcomes
+        // 9: assessmentOutcomes
         _EmbeddedAssessmentOutcomesContent(context: context),
       ],
     );
@@ -635,7 +669,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 class _EmbeddedMahasiswaContent extends StatefulWidget {
   final DatabaseHelper dbHelper;
 
-  const _EmbeddedMahasiswaContent({required this.dbHelper});
+  const _EmbeddedMahasiswaContent({super.key, required this.dbHelper});
 
   @override
   State<_EmbeddedMahasiswaContent> createState() =>
@@ -664,6 +698,11 @@ class _EmbeddedMahasiswaContentState extends State<_EmbeddedMahasiswaContent> {
     setState(() {
       _mahasiswaList = widget.dbHelper.getAllMahasiswa();
     });
+  }
+  
+  // 🎯 Public method untuk refresh data - dipanggil dari parent setelah import
+  void refreshData() {
+    _loadData();
   }
 
   List<dynamic> _filterAndSortData(List<dynamic> data) {
@@ -971,7 +1010,7 @@ class _EmbeddedMahasiswaContentState extends State<_EmbeddedMahasiswaContent> {
 class _EmbeddedMatakuliahContent extends StatefulWidget {
   final DatabaseHelper dbHelper;
 
-  const _EmbeddedMatakuliahContent({required this.dbHelper});
+  const _EmbeddedMatakuliahContent({super.key, required this.dbHelper});
 
   @override
   State<_EmbeddedMatakuliahContent> createState() =>
@@ -1001,6 +1040,11 @@ class _EmbeddedMatakuliahContentState
     setState(() {
       _matakuliahList = widget.dbHelper.getAllMatakuliah();
     });
+  }
+  
+  // 🎯 Public method untuk refresh data - dipanggil dari parent setelah import
+  void refreshData() {
+    _loadData();
   }
 
   List<dynamic> _filterAndSortData(List<dynamic> data) {
@@ -1374,6 +1418,12 @@ class _EmbeddedHitungCPLContentState extends State<_EmbeddedHitungCPLContent>
   final _obeHelper = OBECalculationHelper();
 
   Future<List<Map<String, dynamic>>>? _matakuliahWithNilaiList;
+  
+  // 🎯 Track timeout state (used for debugging timeout scenarios)
+  // ignore: unused_field
+  bool _dataLoadTimeout = false;
+  // ignore: unused_field
+  bool _noDataDialogShown = false;
 
   OBECalculationResult? _calculationResult;
   List<OBECalculationResult>? _batchCalculationResults;
@@ -1594,8 +1644,65 @@ class _EmbeddedHitungCPLContentState extends State<_EmbeddedHitungCPLContent>
   // Load matakuliah yang memiliki data nilai (nilai sudah diupload)
   Future<List<Map<String, dynamic>>> _loadMatakuliahWithNilai() async {
     try {
+      // 🎯 Reset flags sebelum loading baru
+      _dataLoadTimeout = false;
+      _noDataDialogShown = false;
+      
+      print('🔄 [_loadMatakuliahWithNilai] Starting data load with 20s timeout...');
+      
+      final result = await _loadMatakuliahWithNilaiInternal()
+          .timeout(const Duration(seconds: 20), onTimeout: () {
+        print('⏱️ [TIMEOUT] Data loading exceeded 20 seconds - showing no data dialog');
+        
+        // Timeout terpicu - langsung perbarui state dan tampilkan dialog
+        if (mounted) {
+          setState(() {
+            _dataLoadTimeout = true;
+            _noDataDialogShown = true;
+            print('🔍 [TIMEOUT] State updated: _dataLoadTimeout=true, _noDataDialogShown=true');
+          });
+          
+          // Tampilkan dialog langsung (bukan via addPostFrameCallback)
+          if (mounted) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted && !_dialogOpen) {
+                print('📢 [TIMEOUT] Showing no data dialog...');
+                _showNoNilaiDialog();
+              }
+            });
+          }
+        }
+        
+        print('⏱️ [TIMEOUT] Returning empty list to break loading...');
+        return [];
+      });
+      
+      if (result.isNotEmpty) {
+        print('✅ [_loadMatakuliahWithNilai] Data loaded successfully: ${result.length} items');
+      }
+      
+      setState(() {
+        _dataLoadTimeout = false;
+      });
+      
+      return result;
+    } catch (e) {
+      print('❌ Error loading matakuliah: $e');
+      return [];
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> _loadMatakuliahWithNilaiInternal() async {
+    try {
+      print('🔍 [_loadMatakuliahWithNilaiInternal] START - querying database...');
+      
+      final startTime = DateTime.now();
+      
       final allNilai = await _dbHelper.getAllNilai();
+      print('   ⏱️  getAllNilai took ${DateTime.now().difference(startTime).inMilliseconds}ms: ${allNilai.length} records');
+      
       final allMatakuliah = await _dbHelper.getAllMatakuliah();
+      print('   ⏱️  getAllMatakuliah took ${DateTime.now().difference(startTime).inMilliseconds}ms: ${allMatakuliah.length} records');
       
       print('🔍 DEBUG: allNilai count = ${allNilai.length}');
       print('🔍 DEBUG: allMatakuliah count = ${allMatakuliah.length}');
@@ -1640,7 +1747,7 @@ class _EmbeddedHitungCPLContentState extends State<_EmbeddedHitungCPLContent>
         return (a['matakuliah_nama'] as String).compareTo(b['matakuliah_nama'] as String);
       });
       
-      print('🔍 DEBUG: Final result = ${result.length} matakuliah');
+      print('✅ [_loadMatakuliahWithNilaiInternal] COMPLETE in ${DateTime.now().difference(startTime).inSeconds}s: ${result.length} matakuliah');
       for (final item in result) {
         print('  - ${item['matakuliah_kode']} ${item['matakuliah_nama']} (${item['tahun_ajaran']})');
       }
@@ -1650,6 +1757,101 @@ class _EmbeddedHitungCPLContentState extends State<_EmbeddedHitungCPLContent>
       print('❌ Error loading matakuliah: $e');
       return [];
     }
+  }
+
+  void _showNoNilaiDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppRadius.lg),
+        ),
+        icon: Icon(
+          Icons.info_outline,
+          size: 64,
+          color: Colors.orange[700],
+        ),
+        title: const Text(
+          'Belum Ada Nilai',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              'Tidak ada data nilai dalam sistem.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 14,
+                color: Colors.grey[700],
+              ),
+            ),
+            const SizedBox(height: AppSpacing.md),
+            Container(
+              padding: const EdgeInsets.all(AppSpacing.md),
+              decoration: BoxDecoration(
+                color: Colors.orange[50],
+                borderRadius: BorderRadius.circular(AppRadius.sm),
+                border: Border.all(color: Colors.orange[200]!),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Langkah selanjutnya:',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: Colors.orange[900],
+                    ),
+                  ),
+                  const SizedBox(height: AppSpacing.sm),
+                  Text(
+                    '1. Lakukan import nilai terlebih dahulu\n'
+                    '2. Gunakan menu "Import → Import Nilai"\n'
+                    '3. Pilih file Excel/CSV dengan data nilai\n'
+                    '4. Kembali ke halaman ini',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.orange[900],
+                      height: 1.6,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Tutup'),
+          ),
+          ElevatedButton.icon(
+            onPressed: () {
+              Navigator.pop(context);
+              print('🔄 [Coba Lagi] User clicked retry - resetting and reloading...');
+              // Reset state dan reload data
+              setState(() {
+                _dataLoadTimeout = false;
+                _noDataDialogShown = false;
+                _matakuliahWithNilaiList = null;
+                print('🔄 [Coba Lagi] Flags reset, calling _loadData()...');
+              });
+              _loadData();
+            },
+            icon: const Icon(Icons.refresh, size: 16),
+            label: const Text('Coba Lagi'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.orange,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   // Method untuk menghitung CPL dari tabel
@@ -1973,6 +2175,7 @@ class _EmbeddedHitungCPLContentState extends State<_EmbeddedHitungCPLContent>
           if (_calculationResult != null || _batchCalculationResults != null)
             Container(
               key: _resultsKey,
+              width: double.infinity,
               padding: const EdgeInsets.all(AppSpacing.lg),
               decoration: BoxDecoration(
                 color: Colors.grey[50],
@@ -1980,7 +2183,8 @@ class _EmbeddedHitungCPLContentState extends State<_EmbeddedHitungCPLContent>
                 border: Border.all(color: Colors.grey[200]!),
               ),
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   if (_calculationResult != null && _calculationResult!.hasData)
                     FadeTransition(
@@ -2206,6 +2410,7 @@ class _EmbeddedHitungCPLContentState extends State<_EmbeddedHitungCPLContent>
                 IconButton(
                   onPressed: () {
                     setState(() {
+                      _noDataDialogShown = false;
                       _matakuliahWithNilaiList = _loadMatakuliahWithNilai();
                     });
                   },
@@ -2451,7 +2656,8 @@ class _EmbeddedHitungCPLContentState extends State<_EmbeddedHitungCPLContent>
     if (cplCount > 0) avgCPL /= cplCount;
     
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -2571,6 +2777,7 @@ class _EmbeddedHitungCPLContentState extends State<_EmbeddedHitungCPLContent>
             borderRadius: BorderRadius.circular(AppRadius.md),
           ),
           child: Column(
+            mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Container(
@@ -2602,7 +2809,13 @@ class _EmbeddedHitungCPLContentState extends State<_EmbeddedHitungCPLContent>
                   ],
                 ),
               ),
-              _buildCombinedCPMKCPLTable(results),
+              Container(
+                constraints: BoxConstraints(
+                  minHeight: 200,
+                  maxHeight: 800,
+                ),
+                child: _buildCombinedCPMKCPLTable(results),
+              ),
             ],
           ),
         ),
@@ -2801,7 +3014,8 @@ class _EmbeddedHitungCPLContentState extends State<_EmbeddedHitungCPLContent>
           },
         );
 
-        if (columns.length <= 3) {
+        // Check if results is empty
+        if (results.isEmpty) {
           return Padding(
             padding: const EdgeInsets.all(AppSpacing.lg),
             child: Center(
@@ -2813,16 +3027,27 @@ class _EmbeddedHitungCPLContentState extends State<_EmbeddedHitungCPLContent>
           );
         }
 
+        // Hitung total width yang dibutuhkan
+        final totalWidth = (280.0) + // No, NIM, Nama columns
+            (sortedCpmkIds.length * 90.0) + // CPMK columns
+            (sortedCplIds.length * 90.0) + // CPL columns
+            20; // padding
+
+        // Tabel dengan scroll horizontal dan vertikal
         return SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Container(
-            padding: const EdgeInsets.symmetric(vertical: AppSpacing.md),
-            color: Colors.white,
-            child: DataTable(
-              columnSpacing: 10,
-              horizontalMargin: 8,
-              columns: columns,
-              rows: rows,
+          scrollDirection: Axis.vertical,
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: SizedBox(
+              width: totalWidth,
+              child: DataTable(
+                columnSpacing: 10,
+                horizontalMargin: 8,
+                dataRowHeight: 50,
+                headingRowHeight: 56,
+                columns: columns,
+                rows: rows,
+              ),
             ),
           ),
         );
@@ -2831,57 +3056,157 @@ class _EmbeddedHitungCPLContentState extends State<_EmbeddedHitungCPLContent>
   }
 
   Widget _buildCalculationResults() {
+    // 🎯 DEBUG: Log data structure untuk memastikan data tersedia
+    print('🔍 [_buildCalculationResults] START');
+    print('   _calculationResult != null: ${_calculationResult != null}');
+    
+    if (_calculationResult != null) {
+      print('   _calculationResult.hasData: ${_calculationResult!.hasData}');
+      print('   subCPMKValues.length: ${_calculationResult!.subCPMKValues.length}');
+      print('   cpmkValues.length: ${_calculationResult!.cpmkValues.length}');
+      print('   cplValues.length: ${_calculationResult!.cplValues.length}');
+      print('   averageSubCPMKNilai: ${_calculationResult!.averageSubCPMKNilai}');
+      print('   averageCPMKNilai: ${_calculationResult!.averageCPMKNilai}');
+      print('   averageCPLNilai: ${_calculationResult!.averageCPLNilai}');
+      
+      // Log isi setiap map
+      for (final entry in _calculationResult!.subCPMKValues.entries) {
+        print('   SubCPMK.${entry.key}: ${entry.value}');
+      }
+      for (final entry in _calculationResult!.cpmkValues.entries) {
+        print('   CPMK.${entry.key}: ${entry.value}');
+      }
+      for (final entry in _calculationResult!.cplValues.entries) {
+        print('   CPL.${entry.key}: ${entry.value}');
+      }
+    }
+    
+    // 🎯 Check apakah ada data sama sekali
+    final hasSubCPMKData = _calculationResult?.subCPMKValues.isNotEmpty ?? false;
+    final hasCPMKData = _calculationResult?.cpmkValues.isNotEmpty ?? false;
+    final hasCPLData = _calculationResult?.cplValues.isNotEmpty ?? false;
+    final hasAnyData = hasSubCPMKData || hasCPMKData || hasCPLData;
+    
+    print('   hasSubCPMKData: $hasSubCPMKData');
+    print('   hasCPMKData: $hasCPMKData');
+    print('   hasCPLData: $hasCPLData');
+    print('   hasAnyData: $hasAnyData');
+    print('✅ [_buildCalculationResults] END\n');
+    
+    // 🎯 TIDAK bungkus dengan SingleChildScrollView - parent Column sudah scrollable
+    // GUNAKAN Column biasa saja dengan mainAxisSize.min
     return Column(
+      mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
-          'Hasil Perhitungan OBE',
-          style: TextStyle(
-            fontSize: 18,
-            fontWeight: FontWeight.bold,
-            color: AppColors.primary,
+          const Text(
+            'Hasil Perhitungan OBE',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: AppColors.primary,
+            ),
           ),
-        ),
-        const SizedBox(height: AppSpacing.lg),
-        // Ringkasan Nilai
-        _buildSummaryCard(),
-        const SizedBox(height: AppSpacing.lg),
-        // Sub-CPMK Nilai
-        if (_calculationResult!.subCPMKValues.isNotEmpty)
-          _buildValueTable(
-            title: 'Nilai Sub-CPMK',
-            icon: Icons.assessment,
-            color: const Color(0xFF3498DB),
-            values: _calculationResult!.subCPMKValues,
-            labelPrefix: 'Sub-CPMK',
-          ),
-        if (_calculationResult!.subCPMKValues.isNotEmpty)
           const SizedBox(height: AppSpacing.lg),
-        // CPMK Nilai
-        if (_calculationResult!.cpmkValues.isNotEmpty)
-          _buildValueTable(
-            title: 'Nilai CPMK',
-            icon: Icons.school,
-            color: const Color(0xFF27AE60),
-            values: _calculationResult!.cpmkValues,
-            labelPrefix: 'CPMK',
-          ),
-        if (_calculationResult!.cpmkValues.isNotEmpty)
+          
+          // Ringkasan Nilai
+          _buildSummaryCard(),
           const SizedBox(height: AppSpacing.lg),
-        // CPL Nilai
-        if (_calculationResult!.cplValues.isNotEmpty)
-          _buildValueTable(
-            title: 'Nilai CPL',
-            icon: Icons.flag,
-            color: const Color(0xFF8E44AD),
-            values: _calculationResult!.cplValues,
-            labelPrefix: 'CPL',
-          ),
-      ],
-    );
+          
+          // 🎯 Sub-CPMK Nilai
+          if (hasSubCPMKData)
+            _buildValueTable(
+              title: 'Nilai Sub-CPMK',
+              icon: Icons.assessment,
+              color: const Color(0xFF3498DB),
+              values: _calculationResult!.subCPMKValues,
+              labelPrefix: 'Sub-CPMK',
+            ),
+          if (hasSubCPMKData)
+            const SizedBox(height: AppSpacing.lg),
+          
+          // 🎯 CPMK Nilai
+          if (hasCPMKData)
+            _buildValueTable(
+              title: 'Nilai CPMK',
+              icon: Icons.school,
+              color: const Color(0xFF27AE60),
+              values: _calculationResult!.cpmkValues,
+              labelPrefix: 'CPMK',
+            ),
+          if (hasCPMKData)
+            const SizedBox(height: AppSpacing.lg),
+          
+          // 🎯 CPL Nilai
+          if (hasCPLData)
+            _buildValueTable(
+              title: 'Nilai CPL',
+              icon: Icons.flag,
+              color: const Color(0xFF8E44AD),
+              values: _calculationResult!.cplValues,
+              labelPrefix: 'CPL',
+            ),
+          
+          // 🎯 Fallback jika tidak ada data nilai
+          if (!hasAnyData)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(AppSpacing.lg),
+              decoration: BoxDecoration(
+                color: Colors.orange[50],
+                borderRadius: BorderRadius.circular(AppRadius.md),
+                border: Border.all(color: Colors.orange[300]!),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.info_outline,
+                    size: 48,
+                    color: Colors.orange[700],
+                  ),
+                  const SizedBox(height: AppSpacing.md),
+                  Text(
+                    'Tidak Ada Data Nilai',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.orange[900],
+                    ),
+                  ),
+                  const SizedBox(height: AppSpacing.sm),
+                  Text(
+                    'Data Sub-CPMK, CPMK, dan CPL tidak ditemukan dalam hasil perhitungan.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: Colors.orange[700],
+                    ),
+                  ),
+                  const SizedBox(height: AppSpacing.md),
+                  Text(
+                    '💡 Pastikan RPS dan nilai sudah diupload dengan benar.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontStyle: FontStyle.italic,
+                      color: Colors.orange[600],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      );
   }
 
   Widget _buildSummaryCard() {
+    // 🎯 DEBUG log summary values
+    print('📊 [_buildSummaryCard] Summary Values:');
+    print('   averageSubCPMKNilai: ${_calculationResult?.averageSubCPMKNilai}');
+    print('   averageCPMKNilai: ${_calculationResult?.averageCPMKNilai}');
+    print('   averageCPLNilai: ${_calculationResult?.averageCPLNilai}');
+    
     return Card(
       elevation: 2,
       shape: RoundedRectangleBorder(
@@ -2889,23 +3214,63 @@ class _EmbeddedHitungCPLContentState extends State<_EmbeddedHitungCPLContent>
       ),
       child: Padding(
         padding: const EdgeInsets.all(AppSpacing.lg),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceAround,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            _buildSummaryItem(
-              label: 'Rata-rata Sub-CPMK',
-              value: _calculationResult!.averageSubCPMKNilai.toStringAsFixed(2),
-              color: const Color(0xFF3498DB),
-            ),
-            _buildSummaryItem(
-              label: 'Rata-rata CPMK',
-              value: _calculationResult!.averageCPMKNilai.toStringAsFixed(2),
-              color: const Color(0xFF27AE60),
-            ),
-            _buildSummaryItem(
-              label: 'Rata-rata CPL',
-              value: _calculationResult!.averageCPLNilai.toStringAsFixed(2),
-              color: const Color(0xFF8E44AD),
+            // 🎯 Wrap Row dengan LayoutBuilder untuk responsive design tanpa nested scroll
+            LayoutBuilder(
+              builder: (context, constraints) {
+                // Jika space cukup, gunakan Row normal
+                // Jika tidak, gunakan Column
+                final itemWidth = constraints.maxWidth / 3;
+                final needsStack = itemWidth < 100;
+                
+                if (needsStack) {
+                  return Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _buildSummaryItem(
+                        label: 'Rata-rata Sub-CPMK',
+                        value: _calculationResult?.averageSubCPMKNilai.toStringAsFixed(2) ?? '0.00',
+                        color: const Color(0xFF3498DB),
+                      ),
+                      const SizedBox(height: AppSpacing.md),
+                      _buildSummaryItem(
+                        label: 'Rata-rata CPMK',
+                        value: _calculationResult?.averageCPMKNilai.toStringAsFixed(2) ?? '0.00',
+                        color: const Color(0xFF27AE60),
+                      ),
+                      const SizedBox(height: AppSpacing.md),
+                      _buildSummaryItem(
+                        label: 'Rata-rata CPL',
+                        value: _calculationResult?.averageCPLNilai.toStringAsFixed(2) ?? '0.00',
+                        color: const Color(0xFF8E44AD),
+                      ),
+                    ],
+                  );
+                } else {
+                  return Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceAround,
+                    children: [
+                      _buildSummaryItem(
+                        label: 'Rata-rata Sub-CPMK',
+                        value: _calculationResult?.averageSubCPMKNilai.toStringAsFixed(2) ?? '0.00',
+                        color: const Color(0xFF3498DB),
+                      ),
+                      _buildSummaryItem(
+                        label: 'Rata-rata CPMK',
+                        value: _calculationResult?.averageCPMKNilai.toStringAsFixed(2) ?? '0.00',
+                        color: const Color(0xFF27AE60),
+                      ),
+                      _buildSummaryItem(
+                        label: 'Rata-rata CPL',
+                        value: _calculationResult?.averageCPLNilai.toStringAsFixed(2) ?? '0.00',
+                        color: const Color(0xFF8E44AD),
+                      ),
+                    ],
+                  );
+                }
+              },
             ),
           ],
         ),
@@ -2919,20 +3284,30 @@ class _EmbeddedHitungCPLContentState extends State<_EmbeddedHitungCPLContent>
     required Color color,
   }) {
     return Column(
+      mainAxisSize: MainAxisSize.min,
       children: [
         Text(
           value,
           style: TextStyle(
-            fontSize: 24,
+            fontSize: 22,
             fontWeight: FontWeight.bold,
             color: color,
           ),
+          overflow: TextOverflow.ellipsis,
         ),
         const SizedBox(height: AppSpacing.sm),
-        Text(
-          label,
-          style: const TextStyle(fontSize: 12, color: AppColors.subtleText),
-          textAlign: TextAlign.center,
+        SizedBox(
+          width: 120,
+          child: Text(
+            label,
+            style: const TextStyle(
+              fontSize: 11,
+              color: AppColors.subtleText,
+            ),
+            textAlign: TextAlign.center,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
         ),
       ],
     );
@@ -2945,11 +3320,50 @@ class _EmbeddedHitungCPLContentState extends State<_EmbeddedHitungCPLContent>
     required Map<int, double> values,
     String? labelPrefix,
   }) {
+    // 🎯 DEBUG log
+    print('🎯 [_buildValueTable] $title - Items: ${values.length}');
+    
+    // 🎯 Pastikan values tidak kosong
+    if (values.isEmpty) {
+      print('⚠️ [_buildValueTable] $title is empty!');
+      return Card(
+        elevation: 1,
+        child: Container(
+          padding: const EdgeInsets.all(AppSpacing.lg),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.05),
+            borderRadius: BorderRadius.circular(AppRadius.md),
+          ),
+          child: Row(
+            children: [
+              Icon(icon, color: color, size: 20),
+              const SizedBox(width: AppSpacing.sm),
+              Expanded(
+                child: Text(
+                  '$title - Tidak ada data',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    color: color,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    
     return Card(
       elevation: 1,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(AppRadius.md),
+      ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          // Header
           Container(
             padding: const EdgeInsets.all(AppSpacing.md),
             decoration: BoxDecoration(
@@ -2957,35 +3371,65 @@ class _EmbeddedHitungCPLContentState extends State<_EmbeddedHitungCPLContent>
               border: Border(
                 bottom: BorderSide(color: color.withValues(alpha: 0.3)),
               ),
+              borderRadius: const BorderRadius.only(
+                topLeft: Radius.circular(AppRadius.md),
+                topRight: Radius.circular(AppRadius.md),
+              ),
             ),
             child: Row(
               children: [
                 Icon(icon, color: color, size: 20),
                 const SizedBox(width: AppSpacing.sm),
-                Text(
-                  title,
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.bold,
-                    color: color,
+                Expanded(
+                  child: Text(
+                    title,
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                      color: color,
+                    ),
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: AppSpacing.sm,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: color.withValues(alpha: 0.2),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    '${values.length} item',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: color,
+                    ),
                   ),
                 ),
               ],
             ),
           ),
+          
+          // 🎯 Gunakan ListView.separated dengan shrinkWrap untuk bounded constraints
+          // JANGAN gunakan SingleChildScrollView nested - itu menyebabkan infinite height
           ListView.separated(
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
             itemCount: values.length,
-            separatorBuilder: (_, __) =>
-                Divider(height: 1, color: Colors.grey[200]),
+            separatorBuilder: (_, __) => Divider(
+              height: 1,
+              color: Colors.grey[200],
+              indent: AppSpacing.md,
+              endIndent: AppSpacing.md,
+            ),
             itemBuilder: (context, index) {
               final entry = values.entries.elementAt(index);
               final id = entry.key;
               final nilai = entry.value;
-              // Generate label dengan format yang lebih baik
               final name = labelPrefix != null ? '$labelPrefix.$id' : '$title ID $id';
-
+              
               return Padding(
                 padding: const EdgeInsets.symmetric(
                   horizontal: AppSpacing.md,
@@ -2998,8 +3442,10 @@ class _EmbeddedHitungCPLContentState extends State<_EmbeddedHitungCPLContent>
                       child: Text(
                         name,
                         style: const TextStyle(fontSize: 13),
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ),
+                    const SizedBox(width: AppSpacing.sm),
                     Container(
                       padding: const EdgeInsets.symmetric(
                         horizontal: AppSpacing.md,
@@ -3314,6 +3760,10 @@ class _RPSExportScreenState extends State<_RPSExportScreen> {
       // Collect all RPS data
       final rpsDataMap = <String, List<RPSDetail>>{};
       final subCpmkDataMap = <String, List<SubCPMK>>{};
+      final cpmkDataMap = <String, List<CPMK>>{};
+      final cplDataMap = <String, List<CPLMaster>>{};
+      final rpsDetailSubCpmkBobotMap = <String, Map<int, Map<int, double>>>{};
+      
       for (final mk in matakuliahList) {
         final rpsDetails = await widget.dbHelper.getRPSDetailByMatakuliah(mk.id!);
         rpsDataMap[mk.kode] = rpsDetails;
@@ -3321,6 +3771,57 @@ class _RPSExportScreenState extends State<_RPSExportScreen> {
         // Load SubCPMK data for this matakuliah
         final subCpmks = await widget.dbHelper.getSubCPMKByMatakuliah(mk.id!);
         subCpmkDataMap[mk.kode] = subCpmks;
+        
+        // Load bobot per SubCPMK untuk setiap RPS Detail
+        final rpsDetailSubCpmkBobots = <int, Map<int, double>>{};
+        for (final rps in rpsDetails) {
+          if (rps.id != null) {
+            try {
+              final bobotList = await widget.dbHelper.getRPSDetailSubCPMKBobot(rps.id!);
+              if (bobotList.isNotEmpty) {
+                rpsDetailSubCpmkBobots[rps.id!] = {
+                  for (var item in bobotList)
+                    item['sub_cpmk_id'] as int: (item['bobot'] as num).toDouble()
+                };
+              }
+            } catch (e) {
+              // Error loading bobot per SubCPMK untuk RPS Detail
+            }
+          }
+        }
+        rpsDetailSubCpmkBobotMap[mk.kode] = rpsDetailSubCpmkBobots;
+        
+        // Extract unique CPMK IDs from RPS details
+        final cpmkIdSet = <int>{};
+        for (final rps in rpsDetails) {
+          if (rps.cpmkIds != null) {
+            cpmkIdSet.addAll(rps.cpmkIds!);
+          }
+        }
+        
+        // Get only CPMK that are used in RPS
+        List<CPMK> cpmks = [];
+        if (cpmkIdSet.isNotEmpty) {
+          final allProgramCpmks = await widget.dbHelper.getCPMKByMatakuliah(0);
+          cpmks = allProgramCpmks.where((c) => cpmkIdSet.contains(c.id)).toList();
+        }
+        cpmkDataMap[mk.kode] = cpmks;
+        
+        // Extract unique CPL IDs from RPS details
+        final cplIdSet = <int>{};
+        for (final rps in rpsDetails) {
+          if (rps.cplIds != null) {
+            cplIdSet.addAll(rps.cplIds!);
+          }
+        }
+        
+        // Get only CPL that are used in RPS
+        List<CPLMaster> cpls = [];
+        if (cplIdSet.isNotEmpty) {
+          final allCPLs = await widget.dbHelper.getAllCPLMaster();
+          cpls = allCPLs.where((c) => cplIdSet.contains(c.id)).toList();
+        }
+        cplDataMap[mk.kode] = cpls;
       }
 
       // Create PDF
@@ -3328,6 +3829,9 @@ class _RPSExportScreenState extends State<_RPSExportScreen> {
         matakuliahList,
         rpsDataMap,
         subCpmkDataMap,
+        cpmkDataMap,
+        cplDataMap,
+        rpsDetailSubCpmkBobotMap,
       );
 
       if (mounted) {
@@ -3466,8 +3970,14 @@ class _RPSExportScreenState extends State<_RPSExportScreen> {
 
 class _EmbeddedImportContent extends StatelessWidget {
   final BuildContext context;
+  final VoidCallback onMahasiswaImport;
+  final VoidCallback onMatakuliahImport;
 
-  const _EmbeddedImportContent({required this.context});
+  const _EmbeddedImportContent({
+    required this.context,
+    required this.onMahasiswaImport,
+    required this.onMatakuliahImport,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -3511,10 +4021,7 @@ class _EmbeddedImportContent extends StatelessWidget {
                         ),
                         const SizedBox(height: AppSpacing.md),
                         ElevatedButton.icon(
-                          onPressed: () => Navigator.pushNamed(
-                            context,
-                            '/mahasiswa_template_import',
-                          ),
+                          onPressed: onMahasiswaImport,
                           icon: const Icon(Icons.upload_file, size: 18),
                           label: const Text('Import'),
                           style: ElevatedButton.styleFrom(
@@ -3554,10 +4061,7 @@ class _EmbeddedImportContent extends StatelessWidget {
                         ),
                         const SizedBox(height: AppSpacing.md),
                         ElevatedButton.icon(
-                          onPressed: () => Navigator.pushNamed(
-                            context,
-                            '/matakuliah_template_import',
-                          ),
+                          onPressed: onMatakuliahImport,
                           icon: const Icon(Icons.upload_file, size: 18),
                           label: const Text('Import'),
                           style: ElevatedButton.styleFrom(
@@ -3816,8 +4320,48 @@ class _EmbeddedImportContent extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: AppSpacing.lg),
+              const SizedBox(width: AppSpacing.lg),
               Expanded(
-                child: SizedBox.shrink(),
+                child: Card(
+                  elevation: 2,
+                  child: Padding(
+                    padding: const EdgeInsets.all(AppSpacing.lg),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.batch_prediction, size: 40, color: const Color(0xFF8E44AD)),
+                        const SizedBox(height: AppSpacing.md),
+                        const Text(
+                          'Import Nilai Batch',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                        ),
+                        const SizedBox(height: AppSpacing.sm),
+                        Text(
+                          'Import nilai mahasiswa dari file Excel/CSV dengan validasi',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                        ),
+                        const SizedBox(height: AppSpacing.md),
+                        ElevatedButton.icon(
+                          onPressed: () => Navigator.pushNamed(
+                            context,
+                            '/nilai_batch_import',
+                          ),
+                          icon: const Icon(Icons.upload_file, size: 18),
+                          label: const Text('Import'),
+                          style: ElevatedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: AppSpacing.md,
+                              vertical: AppSpacing.sm,
+                            ),
+                            backgroundColor: const Color(0xFF8E44AD),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
               ),
             ],
           ),

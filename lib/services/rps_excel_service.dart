@@ -13,6 +13,7 @@ class RPSExcelService {
   final DatabaseHelper _dbHelper = DatabaseHelper();
 
   // Learning methods for validation
+  // ⚠️ PENULISAN HARUS EXACTLY SAMA (case-sensitive) - tidak ada variasi
   static const List<String> _validLearningMethods = [
     'Case Based Learning',
     'Project Based Learning',
@@ -25,6 +26,8 @@ class RPSExcelService {
   ];
 
   // Assessment types for validation
+  // ⚠️ PENULISAN HARUS EXACTLY SAMA (case-sensitive) - tidak ada variasi
+  // Contoh: "Aktifitas Partisipatif" ✓ (bukan "aktivitas partisipatif" ✗)
   static const List<String> _validAssessmentTypes = [
     'Aktifitas Partisipatif',
     'Hasil Proyek',
@@ -167,7 +170,11 @@ class RPSExcelService {
           final kodesCPL = extractCellValueToString(row.length > 8 ? row[8] : null);
           final jenisNilaiStr = extractCellValueToString(row.length > 9 ? row[9] : null);
           
-          print('[RPS Import] Row $rowNumber - Extracted: mingguKeStr="$mingguKeStr", topik="$topik"');
+          print('[RPS Import] Row $rowNumber - Raw values:');
+          print('  mingguKeStr="$mingguKeStr"');
+          print('  topik="$topik"');
+          print('  metodeAjar="$metodeAjar"');
+          print('  jenisNilaiStr="$jenisNilaiStr"');
 
           // Validasi minggu ke
           final mingguKe = int.tryParse(mingguKeStr);
@@ -190,17 +197,26 @@ class RPSExcelService {
             continue;
           }
 
-          // Validasi metode ajar - tidak diperlukan untuk UTS dan UAS
-          if (metodeAjar.isEmpty && jenisNilaiStr != 'UTS' && jenisNilaiStr != 'UAS') {
-            results['errors'].add('Baris $rowNumber: Metode ajar harus diisi');
+          // Validasi metode ajar - HARUS diisi KECUALI untuk minggu 8 (UTS) dan 16 (UAS)
+          final isUTSorUAS = mingguKe == 8 || mingguKe == 16;
+          print('[RPS Import] Row $rowNumber - isUTSorUAS=$isUTSorUAS, metodeAjar="$metodeAjar"');
+          
+          if (!isUTSorUAS && (metodeAjar.isEmpty || metodeAjar == '-')) {
+            print('[RPS Import] Row $rowNumber - VALIDATION FAILED: Metode ajar kosong untuk minggu non-UTS/UAS');
+            results['errors'].add('Baris $rowNumber: Metode pembelajaran HARUS diisi (tidak boleh kosong atau "-")');
             results['failed']++;
             rowNumber++;
             continue;
           }
 
-          if (metodeAjar.isNotEmpty && !_validLearningMethods.contains(metodeAjar)) {
+          if (metodeAjar.isNotEmpty && metodeAjar != '-' && !_validLearningMethods.contains(metodeAjar)) {
+            print('[RPS Import] Row $rowNumber - VALIDATION FAILED: Metode "$metodeAjar" tidak valid');
+            print('[RPS Import] Valid methods (CASE-SENSITIVE): ${_validLearningMethods.join(", ")}');
             results['errors'].add(
-                'Baris $rowNumber: Metode ajar "$metodeAjar" tidak valid. Gunakan salah satu: ${_validLearningMethods.join(", ")}');
+                'Baris $rowNumber: Metode pembelajaran "$metodeAjar" TIDAK VALID.\n'
+                '❌ Penulisan HARUS EXACTLY sama (case-sensitive).\n'
+                '✓ Pilihan yang benar:\n'
+                '  ${_validLearningMethods.map((m) => '• $m').join('\n  ')}');
             results['failed']++;
             rowNumber++;
             continue;
@@ -270,14 +286,73 @@ class RPSExcelService {
             }
           }
 
-          // Parse dan validasi Jenis Penilaian (optional)
-          String? jenisNilai;
-          if (jenisNilaiStr.isNotEmpty) {
-            if (_validAssessmentTypes.contains(jenisNilaiStr)) {
-              jenisNilai = jenisNilaiStr;
-            } else {
+          // Validasi Jenis Penilaian - HARUS diisi KECUALI untuk minggu 8 (UTS) dan 16 (UAS)
+          print('[RPS Import] Row $rowNumber - isUTSorUAS=$isUTSorUAS, jenisNilaiStr="$jenisNilaiStr"');
+          
+          if (!isUTSorUAS && (jenisNilaiStr.isEmpty || jenisNilaiStr == '-')) {
+            print('[RPS Import] Row $rowNumber - VALIDATION FAILED: Penilaian kosong untuk minggu non-UTS/UAS');
+            results['errors'].add('Baris $rowNumber: Jenis Penilaian HARUS diisi (tidak boleh kosong atau "-")');
+            results['failed']++;
+            rowNumber++;
+            continue;
+          }
+
+          if (jenisNilaiStr.isNotEmpty && jenisNilaiStr != '-' && !_validAssessmentTypes.contains(jenisNilaiStr)) {
+            print('[RPS Import] Row $rowNumber - VALIDATION FAILED: Penilaian "$jenisNilaiStr" tidak valid');
+            print('[RPS Import] Valid assessments (CASE-SENSITIVE): ${_validAssessmentTypes.join(", ")}');
+            results['errors'].add(
+                'Baris $rowNumber: Jenis Penilaian "$jenisNilaiStr" TIDAK VALID.\n'
+                '❌ Penulisan HARUS EXACTLY sama (case-sensitive).\n'
+                '✓ Pilihan yang benar:\n'
+                '  ${_validAssessmentTypes.map((a) => '• $a').join('\n  ')}');
+            results['failed']++;
+            rowNumber++;
+            continue;
+          }
+
+          final jenisNilai = jenisNilaiStr.isEmpty || jenisNilaiStr == '-' ? null : jenisNilaiStr;
+          final finalMetodeAjar = (metodeAjar.isEmpty || metodeAjar == '-') ? '' : metodeAjar;
+
+          // Double-check before saving: metode dan penilaian harus ada untuk non-UTS/UAS
+          if (!isUTSorUAS) {
+            if (finalMetodeAjar.isEmpty) {
+              print('[RPS Import] Row $rowNumber - FINAL CHECK FAILED: Metode ajar kosong untuk minggu non-UTS/UAS');
               results['errors'].add(
-                  'Baris $rowNumber: Jenis Penilaian "$jenisNilaiStr" tidak valid. Gunakan salah satu: ${_validAssessmentTypes.join(", ")}');
+                  'Baris $rowNumber (Minggu $mingguKe): Metode pembelajaran TIDAK BOLEH KOSONG.\n'
+                  '✓ Pilihan yang benar:\n'
+                  '  ${_validLearningMethods.map((m) => '• $m').join('\n  ')}');
+              results['failed']++;
+              rowNumber++;
+              continue;
+            }
+            if (!_validLearningMethods.contains(finalMetodeAjar)) {
+              print('[RPS Import] Row $rowNumber - FINAL CHECK FAILED: Metode "$finalMetodeAjar" tidak dalam daftar valid');
+              results['errors'].add(
+                  'Baris $rowNumber (Minggu $mingguKe): Metode pembelajaran "$finalMetodeAjar" TIDAK VALID.\n'
+                  '❌ Penulisan HARUS EXACTLY sama (case-sensitive).\n'
+                  '✓ Pilihan yang benar:\n'
+                  '  ${_validLearningMethods.map((m) => '• $m').join('\n  ')}');
+              results['failed']++;
+              rowNumber++;
+              continue;
+            }
+            if (jenisNilai == null || jenisNilai.isEmpty) {
+              print('[RPS Import] Row $rowNumber - FINAL CHECK FAILED: Penilaian null/kosong untuk minggu non-UTS/UAS');
+              results['errors'].add(
+                  'Baris $rowNumber (Minggu $mingguKe): Jenis Penilaian TIDAK BOLEH KOSONG.\n'
+                  '✓ Pilihan yang benar:\n'
+                  '  ${_validAssessmentTypes.map((a) => '• $a').join('\n  ')}');
+              results['failed']++;
+              rowNumber++;
+              continue;
+            }
+            if (!_validAssessmentTypes.contains(jenisNilai)) {
+              print('[RPS Import] Row $rowNumber - FINAL CHECK FAILED: Penilaian "$jenisNilai" tidak dalam daftar valid');
+              results['errors'].add(
+                  'Baris $rowNumber (Minggu $mingguKe): Jenis Penilaian "$jenisNilai" TIDAK VALID.\n'
+                  '❌ Penulisan HARUS EXACTLY sama (case-sensitive).\n'
+                  '✓ Pilihan yang benar:\n'
+                  '  ${_validAssessmentTypes.map((a) => '• $a').join('\n  ')}');
               results['failed']++;
               rowNumber++;
               continue;
@@ -289,7 +364,7 @@ class RPSExcelService {
             matakuliahId: matakuliah.id!,
             mingguKe: mingguKe,
             topik: topik,
-            metodeAjar: metodeAjar,
+            metodeAjar: finalMetodeAjar,
             bobot: bobot,
             cpmkIds: cpmkIds,
             subCpmkIds: subCpmkIds,
@@ -299,18 +374,25 @@ class RPSExcelService {
           );
 
           rpsList.add(rpsDetail);
+          print('[RPS Import] Row $rowNumber - SUCCESS: Added to import list');
         } catch (e) {
+          print('[RPS Import] Row $rowNumber - ERROR PARSING: ${e.toString()}');
           results['errors'].add('Baris $rowNumber: Error parsing - ${e.toString()}');
           results['failed']++;
         }
         rowNumber++;
       }
 
+      // Log summary before checking for errors
+      print('[RPS Import] Processing complete. Total rows processed: ${rowNumber - 5}');
+      print('[RPS Import] Successful rows: ${rpsList.length}, Failed rows: ${results['failed']}');
+      
       // Jika ada error, jangan import
       if (results['failed'] > 0) {
+        print('[RPS Import] VALIDATION FAILED - Import aborted due to errors');
         results['success'] = false;
         results['message'] =
-            'Import gagal: ${results['failed']} baris memiliki error';
+            'Import GAGAL: ${results['failed']} baris memiliki error. Silakan perbaiki dan coba lagi.';
         return results;
       }
 

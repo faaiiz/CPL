@@ -9,7 +9,6 @@ def create_mahasiswa_template():
     """Membuat template Excel untuk Mahasiswa"""
     workbook = xlsxwriter.Workbook('templates_import/mahasiswa_template.xlsx')
     worksheet = workbook.add_worksheet('Mahasiswa')
-    instructions_sheet = workbook.add_worksheet('Instruksi')
     
     # Define formats
     header_format = workbook.add_format({
@@ -51,41 +50,6 @@ def create_mahasiswa_template():
     worksheet.set_column(2, 2, 15)  # Tahun Masuk
     worksheet.set_column(3, 3, 15)  # Status
     
-    # Add instructions
-    title_format = workbook.add_format({
-        'bold': True,
-        'font_size': 14
-    })
-    
-    text_format = workbook.add_format({
-        'text_wrap': True,
-        'valign': 'top'
-    })
-    
-    instructions_sheet.write('A1', "Panduan Import Mahasiswa", title_format)
-    
-    instructions = [
-        "",
-        "Kolom yang diperlukan:",
-        "1. NIM - Nomor Induk Mahasiswa (harus unik)",
-        "2. Nama - Nama lengkap mahasiswa",
-        "3. Tahun Masuk - Tahun masuk (contoh: 2022, 2023)",
-        "4. Status - Status mahasiswa (aktif, lulus, cuti, drop)",
-        "",
-        "Catatan:",
-        "- Jangan ubah nama header kolom",
-        "- Pastikan NIM tidak ada yang duplikat",
-        "- Tahun masuk harus berupa angka tahun",
-        "- Status harus salah satu dari: aktif, lulus, cuti, drop",
-        "- Baris data bisa ditambah sesuai kebutuhan",
-        "- Jangan hapus atau ubah instruksi ini",
-    ]
-    
-    for idx, instruction in enumerate(instructions, 1):
-        instructions_sheet.write(idx, 0, instruction, text_format)
-    
-    instructions_sheet.set_column(0, 0, 80)
-    
     workbook.close()
     print("✓ Created mahasiswa_template.xlsx")
 
@@ -94,7 +58,6 @@ def create_matakuliah_template():
     """Membuat template Excel untuk Matakuliah"""
     workbook = xlsxwriter.Workbook('templates_import/matakuliah_template.xlsx')
     worksheet = workbook.add_worksheet('Matakuliah')
-    instructions_sheet = workbook.add_worksheet('Instruksi')
     
     # Define formats
     header_format = workbook.add_format({
@@ -138,42 +101,6 @@ def create_matakuliah_template():
     worksheet.set_column(2, 2, 12)  # Semester
     worksheet.set_column(3, 3, 15)  # Jenis
     worksheet.set_column(4, 4, 8)   # SKS
-    
-    # Add instructions
-    title_format = workbook.add_format({
-        'bold': True,
-        'font_size': 14
-    })
-    
-    text_format = workbook.add_format({
-        'text_wrap': True,
-        'valign': 'top'
-    })
-    
-    instructions_sheet.write('A1', "Panduan Import Matakuliah", title_format)
-    
-    instructions = [
-        "",
-        "Kolom yang diperlukan:",
-        "1. Kode - Kode matakuliah unik (contoh: MAT101)",
-        "2. Nama - Nama lengkap matakuliah",
-        "3. Semester - Semester penawaran (1-8)",
-        "4. Jenis - Jenis matakuliah (wajib atau pilihan)",
-        "5. SKS - Jumlah Satuan Kredit Semester (angka)",
-        "",
-        "Catatan:",
-        "- Jangan ubah nama header kolom",
-        "- Kode matakuliah harus unik, tidak boleh duplikat",
-        "- Semester harus angka antara 1-8",
-        "- Jenis hanya boleh: wajib atau pilihan",
-        "- SKS harus berupa angka (2, 3, 4, dll)",
-        "- Baris data bisa ditambah sesuai kebutuhan",
-    ]
-    
-    for idx, instruction in enumerate(instructions, 1):
-        instructions_sheet.write(idx, 0, instruction, text_format)
-    
-    instructions_sheet.set_column(0, 0, 80)
     
     workbook.close()
     print("✓ Created matakuliah_template.xlsx")

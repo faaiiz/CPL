@@ -53,7 +53,10 @@ IFT404,Penelitian,4,pilihan,3''';
 7,Mampu berinovasi dan mengambil keputusan bisnis''';
 
   // CPMK template content
-  static const String cpmkTemplate = '''Nomor CPMK,Deskripsi CPMK
+  static const String cpmkTemplate = '''Nama Mata Kuliah:,Capaian Program Keahlian
+Kode Mata Kuliah:,
+,,
+Nomor CPMK,Deskripsi CPMK
 1,Memahami konsep dasar dan teori fundamental program studi
 2,Mampu merancang dan menganalisis solusi kompleks
 3,Mampu mengimplementasikan dan menguji solusi
@@ -72,31 +75,222 @@ SUB-CPMK.5,Kolaborasi dan teamwork
 SUB-CPMK.6,Identifikasi dan resolusi masalah
 SUB-CPMK.7,Pembelajaran berkelanjutan''';
 
-  /// Download Mahasiswa template
+  /// Download Mahasiswa template (EXCEL format)
   static Future<String?> downloadMahasiswaTemplate() async {
     try {
       final downloadDir = await getDownloadsDirectory();
       if (downloadDir == null) return null;
 
+      // Buat Excel spreadsheet
+      var excel = Excel.createExcel();
+      Sheet sheetObject = excel['Sheet1'];
+
+      // Set column widths
+      sheetObject.setColWidth(0, 18); // NIM
+      sheetObject.setColWidth(1, 25); // Nama
+      sheetObject.setColWidth(2, 15); // Tahun Masuk
+
+      // Add headers dengan styling
+      var headers = ['NIM', 'Nama', 'Tahun Masuk'];
+
+      for (int i = 0; i < headers.length; i++) {
+        var cell = sheetObject.cell(CellIndex.indexByColumnRow(columnIndex: i, rowIndex: 0));
+        cell.value = headers[i];
+        
+        // Apply header styling: bold, background color
+        try {
+          CellStyle cellStyle = CellStyle(
+            bold: true,
+            backgroundColorHex: '#8E44AD', // Purple background
+            fontColorHex: '#FFFFFF', // White text
+          );
+          cell.cellStyle = cellStyle;
+        } catch (e) {
+          // Could not apply header styling
+        }
+      }
+
+      // Sample data mahasiswa
+      List<List<dynamic>> sampleData = [
+        ['2401001', 'Ahmad Rizki', 2024],
+        ['2401002', 'Budi Santoso', 2024],
+        ['2401003', 'Citra Dewi', 2024],
+        ['2401004', 'Dedi Gunawan', 2024],
+        ['2401005', 'Eka Putri', 2024],
+      ];
+
+      // Masukkan data tabel
+      for (int rowIdx = 0; rowIdx < sampleData.length; rowIdx++) {
+        for (int colIdx = 0; colIdx < sampleData[rowIdx].length; colIdx++) {
+          sheetObject
+              .cell(CellIndex.indexByColumnRow(
+                  columnIndex: colIdx, rowIndex: rowIdx + 1))
+              .value = sampleData[rowIdx][colIdx];
+        }
+      }
+
+      // Add instructions sheet
+      try {
+        Sheet instructionSheet = excel['Instruksi'];
+        instructionSheet.setColWidth(0, 100);
+        
+        instructionSheet
+            .cell(CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: 0))
+            .value = 'Panduan Import Mahasiswa';
+        
+        List<String> instructions = [
+          '',
+          'Kolom yang diperlukan:',
+          '1. NIM - Nomor Induk Mahasiswa (format: 7 digit, contoh: 2401001)',
+          '2. Nama - Nama lengkap mahasiswa',
+          '3. Tahun Masuk - Tahun masuk mahasiswa (format: 4 digit, contoh: 2024)',
+          '',
+          'Catatan Penting:',
+          '- Jangan ubah nama header kolom',
+          '- NIM harus unik dan belum terdaftar di sistem',
+          '- Nama tidak boleh kosong',
+          '- Tahun Masuk harus berupa angka (contoh: 2024, 2023)',
+          '- Baris data dapat ditambah sesuai kebutuhan',
+          '- Hapus baris contoh sebelum melakukan import',
+          '- Jangan mengubah urutan kolom',
+        ];
+        
+        for (int idx = 0; idx < instructions.length; idx++) {
+          instructionSheet
+              .cell(CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: idx + 1))
+              .value = instructions[idx];
+        }
+      } catch (e) {
+        // Could not add instructions sheet
+      }
+
+      // Simpan ke file
       final file = File(
-          '${downloadDir.path}/TEMPLATE_MAHASISWA_${DateTime.now().millisecondsSinceEpoch}.csv');
-      await file.writeAsString(mahasiswaTemplate);
-      return file.path;
+          '${downloadDir.path}/TEMPLATE_MAHASISWA_${DateTime.now().millisecondsSinceEpoch}.xlsx');
+      
+      List<int>? fileBytes = excel.save();
+      if (fileBytes != null) {
+        await file.writeAsBytes(fileBytes);
+        return file.path;
+      }
+
+      return null;
     } catch (e) {
       return null;
     }
   }
 
-  /// Download Matakuliah template
+  /// Download Matakuliah template (EXCEL format)
   static Future<String?> downloadMatakuliahTemplate() async {
     try {
       final downloadDir = await getDownloadsDirectory();
       if (downloadDir == null) return null;
 
+      // Buat Excel spreadsheet
+      var excel = Excel.createExcel();
+      Sheet sheetObject = excel['Sheet1'];
+
+      // Set column widths
+      sheetObject.setColWidth(0, 12); // Kode
+      sheetObject.setColWidth(1, 25); // Nama
+      sheetObject.setColWidth(2, 12); // Semester
+      sheetObject.setColWidth(3, 12); // Jenis
+      sheetObject.setColWidth(4, 10); // SKS
+
+      // Add headers dengan styling
+      var headers = ['Kode', 'Nama', 'Semester', 'Jenis', 'SKS'];
+
+      for (int i = 0; i < headers.length; i++) {
+        var cell = sheetObject.cell(CellIndex.indexByColumnRow(columnIndex: i, rowIndex: 0));
+        cell.value = headers[i];
+        
+        // Apply header styling: bold, background color
+        try {
+          CellStyle cellStyle = CellStyle(
+            bold: true,
+            backgroundColorHex: '#27AE60', // Green background
+            fontColorHex: '#FFFFFF', // White text
+          );
+          cell.cellStyle = cellStyle;
+        } catch (e) {
+          // Could not apply header styling
+        }
+      }
+
+      // Sample data matakuliah
+      List<List<dynamic>> sampleData = [
+        ['IFT101', 'Pemrograman Dasar', 1, 'wajib', 3],
+        ['IFT102', 'Inovasi Digital', 1, 'wajib', 3],
+        ['IFT201', 'Struktur Data', 2, 'wajib', 4],
+        ['IFT202', 'Basis Data', 2, 'pilihan', 3],
+        ['IFT301', 'Kecerdasan Buatan', 3, 'pilihan', 4],
+        ['IFT302', 'Keamanan Siber', 3, 'pilihan', 3],
+        ['IFT401', 'Proyek Akhir', 4, 'wajib', 6],
+        ['IFT402', 'Seminar', 4, 'wajib', 2],
+        ['IFT403', 'Magang', 4, 'pilihan', 3],
+        ['IFT404', 'Penelitian', 4, 'pilihan', 3],
+      ];
+
+      // Masukkan data tabel
+      for (int rowIdx = 0; rowIdx < sampleData.length; rowIdx++) {
+        for (int colIdx = 0; colIdx < sampleData[rowIdx].length; colIdx++) {
+          sheetObject
+              .cell(CellIndex.indexByColumnRow(
+                  columnIndex: colIdx, rowIndex: rowIdx + 1))
+              .value = sampleData[rowIdx][colIdx];
+        }
+      }
+
+      // Add instructions sheet
+      try {
+        Sheet instructionSheet = excel['Instruksi'];
+        instructionSheet.setColWidth(0, 100);
+        
+        instructionSheet
+            .cell(CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: 0))
+            .value = 'Panduan Import Matakuliah';
+        
+        List<String> instructions = [
+          '',
+          'Kolom yang diperlukan:',
+          '1. Kode - Kode matakuliah (format: 6 karakter, contoh: IFT101)',
+          '2. Nama - Nama lengkap matakuliah',
+          '3. Semester - Semester penawaran (format: angka 1-8, contoh: 1, 2, 3)',
+          '4. Jenis - Jenis matakuliah (wajib/pilihan)',
+          '5. SKS - Jumlah Satuan Kredit Semester (format: angka 1-6, contoh: 3, 4)',
+          '',
+          'Catatan Penting:',
+          '- Jangan ubah nama header kolom',
+          '- Kode matakuliah harus unik dan belum terdaftar di sistem',
+          '- Nama tidak boleh kosong',
+          '- Semester harus angka 1-8',
+          '- Jenis harus "wajib" atau "pilihan" (lowercase)',
+          '- SKS harus angka positif (1-6)',
+          '- Baris data dapat ditambah sesuai kebutuhan',
+          '- Hapus baris contoh sebelum melakukan import',
+          '- Jangan mengubah urutan kolom',
+        ];
+        
+        for (int idx = 0; idx < instructions.length; idx++) {
+          instructionSheet
+              .cell(CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: idx + 1))
+              .value = instructions[idx];
+        }
+      } catch (e) {
+        // Could not add instructions sheet
+      }
+
+      // Simpan ke file
       final file = File(
-          '${downloadDir.path}/TEMPLATE_MATAKULIAH_${DateTime.now().millisecondsSinceEpoch}.csv');
-      await file.writeAsString(matakuliahTemplate);
-      return file.path;
+          '${downloadDir.path}/TEMPLATE_MATAKULIAH_${DateTime.now().millisecondsSinceEpoch}.xlsx');
+      
+      List<int>? fileBytes = excel.save();
+      if (fileBytes != null) {
+        await file.writeAsBytes(fileBytes);
+        return file.path;
+      }
+
+      return null;
     } catch (e) {
       return null;
     }
@@ -693,6 +887,8 @@ SUB-CPMK.7,Pembelajaran berkelanjutan''';
   }
 
   /// Download CPMK template (EXCEL format)
+  /// Format: Sama dengan Sub CPMK Batch
+  /// Row 1 = Nama Mata Kuliah, Row 2 = Kode Mata Kuliah, Row 3 = Empty, Row 4 = Column Headers, Row 5+ = Data
   static Future<String?> downloadCPMKTemplate() async {
     try {
       final downloadDir = await getDownloadsDirectory();
@@ -702,15 +898,38 @@ SUB-CPMK.7,Pembelajaran berkelanjutan''';
       var excel = Excel.createExcel();
       Sheet sheetObject = excel['Sheet1'];
 
-      // Header row
+      int currentRow = 0;
+
+      // Row 1: Nama Mata Kuliah (Label di A, Value di B)
+      sheetObject
+          .cell(CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: currentRow))
+          .value = 'Nama Mata Kuliah:';
+      sheetObject
+          .cell(CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: currentRow))
+          .value = 'Capaian Program Keahlian';
+      currentRow++;
+
+      // Row 2: Kode Mata Kuliah (Label di A, Value di B)
+      sheetObject
+          .cell(CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: currentRow))
+          .value = 'Kode Mata Kuliah:';
+      sheetObject
+          .cell(CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: currentRow))
+          .value = '';
+      currentRow++;
+
+      currentRow++; // Skip baris kosong - sekarang row 3
+
+      // Row 4: Header tabel
       final headers = ['Nomor CPMK', 'Deskripsi CPMK'];
       for (int i = 0; i < headers.length; i++) {
         sheetObject
-            .cell(CellIndex.indexByColumnRow(columnIndex: i, rowIndex: 0))
+            .cell(CellIndex.indexByColumnRow(columnIndex: i, rowIndex: currentRow))
             .value = headers[i];
       }
+      currentRow++;
 
-      // Data contoh
+      // Row 5+: Data contoh
       final dataRows = [
         ['1', 'Memahami konsep dasar dan teori fundamental program studi'],
         ['2', 'Mampu merancang dan menganalisis solusi kompleks'],
@@ -721,24 +940,24 @@ SUB-CPMK.7,Pembelajaran berkelanjutan''';
         ['7', 'Mampu melanjutkan pembelajaran dan pengembangan profesional'],
       ];
 
-      // Masukkan data
-      for (int rowIndex = 0; rowIndex < dataRows.length; rowIndex++) {
-        final row = dataRows[rowIndex];
+      // Masukkan data tabel
+      for (final row in dataRows) {
         for (int colIndex = 0; colIndex < row.length; colIndex++) {
           sheetObject
               .cell(CellIndex.indexByColumnRow(
-                  columnIndex: colIndex, rowIndex: rowIndex + 1))
+                  columnIndex: colIndex, rowIndex: currentRow))
               .value = row[colIndex];
         }
+        currentRow++;
       }
 
       // Set column widths
-      sheetObject.setColWidth(0, 15); // Nomor CPMK
-      sheetObject.setColWidth(1, 60); // Deskripsi CPMK
+      sheetObject.setColWidth(0, 18); // Nomor CPMK
+      sheetObject.setColWidth(1, 150); // Deskripsi CPMK
 
-      // Simpan ke file
-      final file = File(
-          '${downloadDir.path}/TEMPLATE_CPMK_${DateTime.now().millisecondsSinceEpoch}.xlsx');
+      // Simpan ke file dengan nama: CPMK_Template_<tahun>.xlsx
+      final fileName = 'CPMK_Template_${DateTime.now().year}.xlsx';
+      final file = File('${downloadDir.path}/$fileName');
       
       List<int>? fileBytes = excel.save();
       if (fileBytes != null) {
@@ -754,7 +973,7 @@ SUB-CPMK.7,Pembelajaran berkelanjutan''';
   }
 
   /// Download Sub CPMK template (EXCEL format)
-  static Future<String?> downloadSubCPMKTemplate({String? matakuliahNama}) async {
+  static Future<String?> downloadSubCPMKTemplate({String? matakuliahNama, String? kodeMatakuliah}) async {
     try {
       final downloadDir = await getDownloadsDirectory();
       if (downloadDir == null) return null;
@@ -772,6 +991,15 @@ SUB-CPMK.7,Pembelajaran berkelanjutan''';
       sheetObject
           .cell(CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: currentRow))
           .value = matakuliahNama ?? 'Pemrograman Dasar';
+      currentRow++;
+
+      // Informasi header (Kode Mata Kuliah)
+      sheetObject
+          .cell(CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: currentRow))
+          .value = 'Kode Mata Kuliah:';
+      sheetObject
+          .cell(CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: currentRow))
+          .value = kodeMatakuliah ?? '';
       currentRow += 2; // Skip satu baris sebelum tabel
 
       // Header row tabel
@@ -820,6 +1048,315 @@ SUB-CPMK.7,Pembelajaran berkelanjutan''';
       return null;
     } catch (e) {
       // Error creating Excel Sub CPMK template
+      return null;
+    }
+  }
+
+  /// Download Sub CPMK Batch template (untuk import batch per matakuliah)
+  /// Format: B1 berisi nama matakuliah, mulai data di row 4
+  static Future<String?> downloadSubCPMKBatchTemplate({
+    String? kodeMatakuliah,
+    String? namaMatakuliah,
+  }) async {
+    try {
+      final downloadDir = await getDownloadsDirectory();
+      if (downloadDir == null) return null;
+
+      // Buat Excel spreadsheet
+      var excel = Excel.createExcel();
+      Sheet sheetObject = excel['Sheet1'];
+
+      int currentRow = 0;
+
+      // Row 1: Nama Mata Kuliah (di kolom B - index 1)
+      sheetObject
+          .cell(CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: currentRow))
+          .value = 'Nama Mata Kuliah:';
+      sheetObject
+          .cell(CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: currentRow))
+          .value = namaMatakuliah ?? 'Analisis dan Karakterisasi Material';
+      currentRow++; // Row 2
+
+      // Row 2: Kode Mata Kuliah (di kolom B - index 1)
+      sheetObject
+          .cell(CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: currentRow))
+          .value = 'Kode Mata Kuliah:';
+      sheetObject
+          .cell(CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: currentRow))
+          .value = kodeMatakuliah ?? '';
+      currentRow++; // Row 3
+
+      currentRow++; // Skip baris kosong - sekarang row 4
+
+      // Row 3: Header tabel
+      final headers = ['Kode Sub CPMK', 'Deskripsi Sub CPMK'];
+      for (int i = 0; i < headers.length; i++) {
+        sheetObject
+            .cell(CellIndex.indexByColumnRow(columnIndex: i, rowIndex: currentRow))
+            .value = headers[i];
+      }
+      currentRow++; // Row 4
+
+      // Row 4+: Data contoh
+      final dataRows = [
+        ['SUB-CPMK.1', 'Mahasiswa mampu menjelaskan prinsip-prinsip dasar berbagai metode karakterisasi material, khususnya spektroskopi, serta memahami peran krusialnya dalam pengembangan ilmu pengetahuan dan teknologi material'],
+        ['SUB-CPMK.2', 'Mahasiswa mampu memahami dan menerapkan prinsip dasar instrumentasi dan analisis data dari UV-Vis Spektrofotometer untuk mengkarakterisasi sifat optik material dan menginterpretasi hasil pengukurannya'],
+        ['SUB-CPMK.3', 'Mahasiswa mampu menerapkan dan menganalisis data dan instrumen ARD dan SEM untuk mengkarakterisasi mikrostruktur material, mengidentifikasi fase kristal, serta mengaitkannya dengan sifat-sifat material yang relevan'],
+        ['SUB-CPMK.4', 'Mahasiswa mampu memahami dan menerapkan prinsip dasar dan metode komposisi untuk karakterisasi komposisi unsur material, serta menginterpretasi hasil pengukurannya'],
+        ['SUB-CPMK.5', 'Mahasiswa mampu menjelaskan prinsip dasar, menganalisis spektrum FTIR untuk pengidentifikasian gugus fungsi dan ikatan kimia dalam material secara efektif'],
+        ['SUB-CPMK.6', 'Mahasiswa mampu menjelaskan prinsip dasar, menginterpretasi data DTA dan TGA, serta menganalisis sifat thermal material, seperti transisi fasa, dekomposisi, dan perubahan massa'],
+        ['SUB-CPMK.7', 'Mahasiswa mamahami dan menerapkan prinsip Efek Hall untuk mengukur dan mengkarakterisasi sifat listrik material, seperti menentukan jenis, konsentrasi, dan mobilitas pembawa muatan'],
+      ];
+
+      // Masukkan data tabel
+      for (final row in dataRows) {
+        for (int colIndex = 0; colIndex < row.length; colIndex++) {
+          sheetObject
+              .cell(CellIndex.indexByColumnRow(
+                  columnIndex: colIndex, rowIndex: currentRow))
+              .value = row[colIndex];
+        }
+        currentRow++;
+      }
+
+      // Set column widths
+      sheetObject.setColWidth(0, 18); // Kode Sub CPMK
+      sheetObject.setColWidth(1, 150); // Deskripsi Sub CPMK (lebih lebar)
+
+      // Simpan ke file dengan nama: SUB_CPMK_<nama mata kuliah>_<tahun>.xlsx
+      final fileName = 'SUB_CPMK_${kodeMatakuliah ?? 'Mata_Kuliah'}_${DateTime.now().year}.xlsx';
+      final file = File('${downloadDir.path}/$fileName');
+      
+      List<int>? fileBytes = excel.save();
+      if (fileBytes != null) {
+        await file.writeAsBytes(fileBytes);
+        return file.path;
+      }
+
+      return null;
+    } catch (e) {
+      // Error creating Excel Sub CPMK batch template
+      return null;
+    }
+  }
+
+  /// Download RPS Batch template (untuk import batch RPS per matakuliah)
+  /// Format: B1 = Nama Matakuliah, B2 = Kode Matakuliah
+  /// Row 3 = Column Headers, Row 4+ = Data
+  static Future<String?> downloadRPSBatchTemplate({
+    String? kodeMatakuliah,
+    String? namaMatakuliah,
+  }) async {
+    try {
+      final downloadDir = await getDownloadsDirectory();
+      if (downloadDir == null) return null;
+
+      // Buat Excel spreadsheet
+      var excel = Excel.createExcel();
+      Sheet sheetObject = excel['Sheet1'];
+
+      int currentRow = 0;
+
+      // Row 1: Nama Mata Kuliah (di kolom B)
+      sheetObject
+          .cell(CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: currentRow))
+          .value = 'Nama Mata Kuliah';
+      sheetObject
+          .cell(CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: currentRow))
+          .value = namaMatakuliah ?? 'Kalkulus dan Vektor';
+      currentRow++;
+
+      // Row 2: Kode Mata Kuliah (di kolom B)
+      sheetObject
+          .cell(CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: currentRow))
+          .value = 'Kode Matakuliah';
+      sheetObject
+          .cell(CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: currentRow))
+          .value = kodeMatakuliah ?? 'PAFS6313';
+      currentRow++;
+
+      currentRow++; // Skip baris kosong - sekarang row 4
+
+      // Row 4: Header tabel (sesuai gambar)
+      final headers = [
+        'Kode Matakuliah',
+        'Nama Matakuliah',
+        'Minggu Ke',
+        'Topik Pembelajaran',
+        'Metode Ajar',
+        'Bobot (%)',
+        'Kode CPMK',
+        'Kode Sub CPMK',
+        'Kode CPL',
+        'Jenis Penilaian',
+      ];
+      for (int i = 0; i < headers.length; i++) {
+        sheetObject
+            .cell(CellIndex.indexByColumnRow(columnIndex: i, rowIndex: currentRow))
+            .value = headers[i];
+      }
+      currentRow++;
+
+      // Row 5+: Data contoh (sesuai gambar)
+      final dataRows = [
+        [
+          'PAFS6313',
+          'Kalkulus dan Vektor',
+          '1',
+          'Kinematika - Pendahuluan',
+          'Small Group Discussion',
+          '5',
+          'CPMK.3',
+          'SUB-CPMK.1',
+          'CPL.4',
+          'Aktifitas Partisipatif'
+        ],
+        [
+          'PAFS6313',
+          'Kalkulus dan Vektor',
+          '2',
+          'Kinematika - Gerak Lurus',
+          'Discovery Learning',
+          '5',
+          'CPMK.3',
+          'SUB-CPMK.1',
+          'CPL.4',
+          'Tugas'
+        ],
+        [
+          'PAFS6313',
+          'Kalkulus dan Vektor',
+          '3',
+          'Dinamika - Hukum Newton',
+          'Cooperative Learning',
+          '5',
+          'CPMK.3',
+          'SUB-CPMK.2',
+          'CPL.4',
+          'Kuis'
+        ],
+        [
+          'PAFS6313',
+          'Kalkulus dan Vektor',
+          '4',
+          'Energi dan Kerja',
+          'Project Based Learning',
+          '5',
+          'CPMK.3',
+          'SUB-CPMK.2',
+          'CPL.4',
+          'Hasil Proyek'
+        ],
+        [
+          'PAFS6313',
+          'Kalkulus dan Vektor',
+          '5',
+          'Momentum dan Impuls',
+          'Small Group Discussion',
+          '5',
+          'CPMK.3',
+          'SUB-CPMK.3',
+          'CPL.4',
+          'Aktifitas Partisipatif'
+        ],
+        [
+          'PAFS6313',
+          'Kalkulus dan Vektor',
+          '6',
+          'Rotasi Benda Tegar',
+          'Discovery Learning',
+          '5',
+          'CPMK.3',
+          'SUB-CPMK.4',
+          'CPL.4',
+          'Tugas'
+        ],
+        [
+          'PAFS6313',
+          'Kalkulus dan Vektor',
+          '7',
+          'Gelatik dan Gelombang',
+          'Cooperative Learning',
+          '5',
+          'CPMK.3',
+          'SUB-CPMK.4',
+          'CPL.4',
+          'Kuis'
+        ],
+        [
+          'PAFS6313',
+          'Kalkulus dan Vektor',
+          '8',
+          'Persiapan UTS',
+          'Cooperative Learning',
+          '0',
+          'CPMK.3',
+          '',
+          'CPL.4',
+          ''
+        ],
+        [
+          'PAFS6313',
+          'Kalkulus dan Vektor',
+          '9',
+          'Termodinamika - Pendahuluan',
+          'Small Group Discussion',
+          '5',
+          'CPMK.3',
+          'SUB-CPMK.5',
+          'CPL.4',
+          'Aktifitas Partisipatif'
+        ],
+        [
+          'PAFS6313',
+          'Kalkulus dan Vektor',
+          '10',
+          'Hukum Termodinamika',
+          'Discovery Learning',
+          '5',
+          'CPMK.3',
+          'SUB-CPMK.5',
+          'CPL.4',
+          'Tugas'
+        ],
+      ];
+
+      // Masukkan data tabel
+      for (final row in dataRows) {
+        for (int colIndex = 0; colIndex < row.length; colIndex++) {
+          sheetObject
+              .cell(CellIndex.indexByColumnRow(
+                  columnIndex: colIndex, rowIndex: currentRow))
+              .value = row[colIndex];
+        }
+        currentRow++;
+      }
+
+      // Set column widths
+      sheetObject.setColWidth(0, 18); // Kode Matakuliah
+      sheetObject.setColWidth(1, 25); // Nama Matakuliah
+      sheetObject.setColWidth(2, 12); // Minggu Ke
+      sheetObject.setColWidth(3, 35); // Topik Pembelajaran
+      sheetObject.setColWidth(4, 25); // Metode Ajar
+      sheetObject.setColWidth(5, 12); // Bobot (%)
+      sheetObject.setColWidth(6, 12); // Kode CPMK
+      sheetObject.setColWidth(7, 15); // Kode Sub CPMK
+      sheetObject.setColWidth(8, 12); // Kode CPL
+      sheetObject.setColWidth(9, 25); // Jenis Penilaian
+
+      // Simpan ke file dengan nama: RPS_<kode_mata_kuliah>_<tahun>.xlsx
+      final fileName = 'RPS_${kodeMatakuliah ?? 'Mata_Kuliah'}_${DateTime.now().year}.xlsx';
+      final file = File('${downloadDir.path}/$fileName');
+      
+      List<int>? fileBytes = excel.save();
+      if (fileBytes != null) {
+        await file.writeAsBytes(fileBytes);
+        return file.path;
+      }
+
+      return null;
+    } catch (e) {
+      // Error creating Excel RPS batch template
       return null;
     }
   }
@@ -1054,8 +1591,13 @@ SUB-CPMK.7,Pembelajaran berkelanjutan''';
       case 'cpmk':
         return {
           'columns': [
-            'Kolom A: Nomor CPMK (angka)',
-            'Kolom B: Deskripsi CPMK',
+            'Header (Otomatis Terisi):',
+            '  • Nama Mata Kuliah',
+            '  • Kode Mata Kuliah',
+            '',
+            'Kolom Tabel Data:',
+            '  A: Nomor CPMK (angka)',
+            '  B: Deskripsi CPMK (penjelasan detail capaian pembelajaran)',
           ],
         };
       case 'sub_cpmk':

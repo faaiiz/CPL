@@ -1,10 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:excel/excel.dart' as excel_lib;
+import 'dart:io';
 import '../constants/app_constants.dart';
-import '../services/template_service.dart';
 import '../services/excel_import_service.dart';
-import '../services/database_helper.dart';
-import '../models/matakuliah_model.dart';
 
 class NilaiBatchImportScreen extends StatefulWidget {
   const NilaiBatchImportScreen({super.key});
@@ -16,24 +15,12 @@ class NilaiBatchImportScreen extends StatefulWidget {
 
 class _NilaiBatchImportScreenState extends State<NilaiBatchImportScreen> {
   final _excelImportService = ExcelImportService();
-  final _dbHelper = DatabaseHelper();
-
-  // Tahun Ajaran list
-  final List<int> tahunAjaranList = [
-    2020, 2021, 2022, 2023, 2024, 2025, 2026, 2027, 2028, 2029, 2030, 2031
-  ];
 
   // State variables
-  int? _selectedTahunAjaran;
-  List<Matakuliah> _matakuliahList = [];
-  int? _selectedMatakuliahId;
-  Matakuliah? _selectedMatakuliah;
-
-  String? _selectedFilePath;
-  String? _selectedFileName;
+  List<String> _selectedFilePaths = [];
+  List<String> _selectedFileNames = [];
 
   bool _isLoading = false;
-  bool _isLoadingMatakuliah = false;
   
   Map<String, dynamic>? _importResult;
   List<String> _importErrors = [];
@@ -42,37 +29,61 @@ class _NilaiBatchImportScreenState extends State<NilaiBatchImportScreen> {
   @override
   void initState() {
     super.initState();
-    // Set default: tahun ajaran terbaru
-    if (tahunAjaranList.isNotEmpty) {
-      _selectedTahunAjaran = tahunAjaranList.last;
-    }
-    _loadMatakuliah();
+    // No initialization needed - will read from Excel file
   }
 
-  Future<void> _loadMatakuliah() async {
-    setState(() {
-      _isLoadingMatakuliah = true;
-    });
-    
+  /// Validasi B1 (Kode Matakuliah) dan B3 (Tahun Ajaran) dari Excel file
+  Future<Map<String, dynamic>> _validateExcelHeaders(String filePath) async {
     try {
-      final matakuliah = await _dbHelper.getAllMatakuliah();
-      setState(() {
-        _matakuliahList = matakuliah;
-        if (_matakuliahList.isNotEmpty) {
-          _selectedMatakuliahId = _matakuliahList[0].id;
-          _selectedMatakuliah = _matakuliahList[0];
-        }
-      });
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error loading matakuliah: $e')),
-        );
+      final bytes = await File(filePath).readAsBytes();
+      final excel = excel_lib.Excel.decodeBytes(bytes);
+      final sheet = excel.tables.values.first;
+
+      // Baca B1 - Kode Matakuliah
+      String? kodeMatakuliahFromExcel;
+      String? tahunAjaranFromExcel;
+
+      // Cell B1 (row 0, col 1)
+      if (sheet.rows.length > 0 && sheet.rows[0].length > 1) {
+        final cellB1 = sheet.rows[0][1];
+        kodeMatakuliahFromExcel = cellB1?.value?.toString().trim();
       }
-    } finally {
-      setState(() {
-        _isLoadingMatakuliah = false;
-      });
+
+      // Cell B3 (row 2, col 1)
+      if (sheet.rows.length > 2 && sheet.rows[2].length > 1) {
+        final cellB3 = sheet.rows[2][1];
+        tahunAjaranFromExcel = cellB3?.value?.toString().trim();
+      }
+
+      // Validasi B1 - Kode Matakuliah
+      if (kodeMatakuliahFromExcel == null || kodeMatakuliahFromExcel.isEmpty) {
+        return {
+          'error': 'Kode Matakuliah di B1 kosong',
+          'type': 'matakuliah',
+          'success': false,
+        };
+      }
+
+      // Validasi B3 - Tahun Ajaran
+      if (tahunAjaranFromExcel == null || tahunAjaranFromExcel.isEmpty) {
+        return {
+          'error': 'Tahun Ajaran di B3 kosong',
+          'type': 'tahun',
+          'success': false,
+        };
+      }
+
+      return {
+        'success': true,
+        'kodeMatakuliah': kodeMatakuliahFromExcel,
+        'tahunAjaran': tahunAjaranFromExcel,
+      };
+    } catch (e) {
+      return {
+        'error': 'Error membaca file Excel: $e',
+        'type': 'file',
+        'success': false,
+      };
     }
   }
 
@@ -81,14 +92,13 @@ class _NilaiBatchImportScreenState extends State<NilaiBatchImportScreen> {
       final result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
         allowedExtensions: ['xlsx', 'csv'],
-        allowMultiple: false,
+        allowMultiple: true,
       );
 
       if (result != null && result.files.isNotEmpty) {
-        final file = result.files.first;
         setState(() {
-          _selectedFilePath = file.path;
-          _selectedFileName = file.name;
+          _selectedFilePaths = result.files.map((f) => f.path!).toList();
+          _selectedFileNames = result.files.map((f) => f.name).toList();
           _importResult = null;
           _importErrors = [];
         });
@@ -102,127 +112,113 @@ class _NilaiBatchImportScreenState extends State<NilaiBatchImportScreen> {
     }
   }
 
-  void _removeFile() {
+  void _removeFile(int index) {
     setState(() {
-      _selectedFilePath = null;
-      _selectedFileName = null;
+      _selectedFilePaths.removeAt(index);
+      _selectedFileNames.removeAt(index);
     });
   }
 
-  Future<void> _downloadTemplate() async {
-    if (_selectedMatakuliah == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Pilih matakuliah terlebih dahulu')),
-      );
-      return;
-    }
-
-    try {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Mengunduh template...')),
-      );
-
-      final path = await TemplateService.downloadNilaiSingleMatakuliahTemplate(
-        kodeMatakuliah: _selectedMatakuliah!.kode,
-        namaMatakuliah: _selectedMatakuliah!.nama,
-        tahunAjaran: _selectedTahunAjaran?.toString() ?? '2024',
-      );
-
-      if (path != null && mounted) {
-        final fileName = path.split('/').last;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('✓ Template berhasil diunduh:\n$fileName'),
-            backgroundColor: AppColors.success,
-            duration: const Duration(seconds: 4),
-          ),
-        );
-        print('Template downloaded: $path');
-      } else if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              '❌ Gagal mengunduh template.\n\nMungkin penyebab:\n'
-              '• Izin folder tidak tersedia\n'
-              '• Disk space tidak cukup\n'
-              '• Folder download terlocked\n\n'
-              'Cek console untuk detail error'
-            ),
-            backgroundColor: AppColors.danger,
-            duration: Duration(seconds: 5),
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('❌ Error: $e'),
-            backgroundColor: AppColors.danger,
-            duration: const Duration(seconds: 5),
-          ),
-        );
-      }
-      print('Error downloading template: $e');
-    }
+  void _clearAllFiles() {
+    setState(() {
+      _selectedFilePaths = [];
+      _selectedFileNames = [];
+    });
   }
 
   Future<void> _importData() async {
-    if (_selectedFilePath == null) {
+    if (_selectedFilePaths.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Pilih file Excel terlebih dahulu')),
       );
       return;
     }
 
-    if (_selectedMatakuliah == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Pilih matakuliah terlebih dahulu')),
-      );
-      return;
-    }
-
-    if (_selectedTahunAjaran == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Pilih tahun ajaran terlebih dahulu')),
-      );
-      return;
-    }
-
     setState(() {
       _isLoading = true;
-      _progressMessage = 'Importing nilai untuk ${_selectedMatakuliah!.nama}...';
+      _progressMessage = 'Processing ${_selectedFilePaths.length} file(s)...';
     });
 
     try {
-      final result = await _excelImportService.importNilaiDetailFromExcel(
-        _selectedFilePath!,
-        matakuliahFilter: _selectedMatakuliah!.kode,
-      );
+      int totalImported = 0;
+      int totalFailed = 0;
+      List<String> allErrors = [];
+      int successCount = 0;
+
+      for (int i = 0; i < _selectedFilePaths.length; i++) {
+        final filePath = _selectedFilePaths[i];
+        final fileName = _selectedFileNames[i];
+
+        setState(() {
+          _progressMessage =
+              'Processing file ${i + 1}/${_selectedFilePaths.length}: $fileName';
+        });
+
+        // 🔍 Validasi B1 dan B3
+        final validationResult =
+            await _validateExcelHeaders(filePath);
+
+        if (!validationResult['success']) {
+          allErrors.add('❌ $fileName: ${validationResult['error']}');
+          totalFailed++;
+          continue;
+        }
+
+        // ✅ Validasi berhasil, lanjut dengan import
+        try {
+          final kodeMatakuliah = validationResult['kodeMatakuliah'] as String;
+          final result =
+              await _excelImportService.importNilaiDetailFromExcel(
+            filePath,
+            matakuliahFilter: kodeMatakuliah,
+          );
+
+          totalImported += (result['imported'] as int?) ?? 0;
+          totalFailed += (result['failed'] as int?) ?? 0;
+
+          if (result['errors'] != null) {
+            final errors = result['errors'] as List<dynamic>;
+            allErrors.add('✓ $fileName: ${errors.length} error(s)');
+          } else {
+            successCount++;
+          }
+        } catch (e) {
+          allErrors.add('❌ $fileName: Error - $e');
+          totalFailed++;
+        }
+      }
 
       setState(() {
-        _importResult = result;
-        _importErrors = List<String>.from(result['errors'] as List? ?? []);
+        _importResult = {
+          'success': totalFailed == 0,
+          'imported': totalImported,
+          'failed': totalFailed,
+          'message':
+              'Diproses: ${_selectedFilePaths.length} file, Berhasil: $successCount, Gagal: ${_selectedFilePaths.length - successCount}',
+          'errors': allErrors,
+        };
+        _importErrors = allErrors;
       });
 
       if (mounted) {
-        if (result['success']) {
+        if (totalFailed == 0) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text(
-                '✓ Import berhasil: ${result['imported']} nilai berhasil diimport',
+                '✓ Import selesai: $totalImported nilai berhasil diimport dari ${_selectedFilePaths.length} file',
               ),
               backgroundColor: AppColors.success,
-              duration: const Duration(seconds: 3),
+              duration: const Duration(seconds: 4),
             ),
           );
         } else {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text(
-                result['message'] ?? 'Import gagal',
+                '⚠️ Import selesai dengan beberapa error: $totalImported berhasil, $totalFailed gagal',
               ),
-              backgroundColor: AppColors.danger,
+              backgroundColor: Colors.orange,
+              duration: const Duration(seconds: 4),
             ),
           );
         }
@@ -288,123 +284,29 @@ class _NilaiBatchImportScreenState extends State<NilaiBatchImportScreen> {
                     '✓ Pilih tahun ajaran\n'
                     '✓ Pilih matakuliah\n'
                     '✓ Download template khusus matakuliah\n'
-                    '✓ Isi dataFile dan import',
+                    '✓ Isi data file dan import',
                     style: TextStyle(
                       fontSize: 12,
                       height: 1.6,
                     ),
                   ),
+                  const SizedBox(height: AppSpacing.md),
+                  Container(
+                    padding: const EdgeInsets.all(AppSpacing.sm),
+                    decoration: BoxDecoration(
+                      color: AppColors.secondary.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(AppRadius.sm),
+                    ),
+                    child: const Text(
+                      '🔍 Validasi: File akan divalidasi terhadap B1 (Kode Matakuliah) dan B3 (Tahun Ajaran)',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: AppColors.secondary,
+                        fontStyle: FontStyle.italic,
+                      ),
+                    ),
+                  ),
                 ],
-              ),
-            ),
-
-            const SizedBox(height: AppSpacing.lg),
-
-            // Tahun Ajaran Selection
-            const Text(
-              'Tahun Ajaran',
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-                fontSize: 14,
-                color: AppColors.primary,
-              ),
-            ),
-            const SizedBox(height: AppSpacing.md),
-
-            DropdownButtonFormField<int>(
-              initialValue: _selectedTahunAjaran,
-              decoration: InputDecoration(
-                labelText: 'Pilih Tahun Ajaran',
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(AppRadius.md),
-                ),
-                prefixIcon: const Icon(Icons.calendar_today),
-              ),
-              items: tahunAjaranList
-                  .map((tahun) => DropdownMenuItem(
-                        value: tahun,
-                        child: Text(tahun.toString()),
-                      ))
-                  .toList(),
-              onChanged: (value) {
-                setState(() {
-                  _selectedTahunAjaran = value;
-                });
-              },
-            ),
-
-            const SizedBox(height: AppSpacing.lg),
-
-            // Matakuliah Selection
-            const Text(
-              'Matakuliah',
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-                fontSize: 14,
-                color: AppColors.primary,
-              ),
-            ),
-            const SizedBox(height: AppSpacing.md),
-
-            if (_isLoadingMatakuliah)
-              const Center(
-                child: CircularProgressIndicator(),
-              )
-            else if (_matakuliahList.isEmpty)
-              Container(
-                padding: const EdgeInsets.all(AppSpacing.lg),
-                decoration: BoxDecoration(
-                  color: AppColors.danger.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(AppRadius.md),
-                ),
-                child: const Text(
-                  'Tidak ada matakuliah ditemukan. Silakan tambahkan matakuliah terlebih dahulu.',
-                  style: TextStyle(color: AppColors.danger),
-                ),
-              )
-            else
-              DropdownButtonFormField<int>(
-                value: _selectedMatakuliahId,
-                decoration: InputDecoration(
-                  labelText: 'Pilih Matakuliah',
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(AppRadius.md),
-                  ),
-                  prefixIcon: const Icon(Icons.book),
-                ),
-                items: _matakuliahList
-                    .map((mk) => DropdownMenuItem(
-                          value: mk.id,
-                          child: Text('${mk.kode} - ${mk.nama}'),
-                        ))
-                    .toList(),
-                onChanged: (value) {
-                  if (value != null) {
-                    setState(() {
-                      _selectedMatakuliahId = value;
-                      _selectedMatakuliah = _matakuliahList
-                          .firstWhere((mk) => mk.id == value);
-                    });
-                  }
-                },
-              ),
-
-            const SizedBox(height: AppSpacing.lg),
-
-            // Download Template Button
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: _downloadTemplate,
-                icon: const Icon(Icons.download, size: 18),
-                label: const Text('Download Template Excel'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.secondary.withOpacity(0.8),
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(
-                    vertical: AppSpacing.md,
-                  ),
-                ),
               ),
             ),
 
@@ -421,37 +323,104 @@ class _NilaiBatchImportScreenState extends State<NilaiBatchImportScreen> {
             ),
             const SizedBox(height: AppSpacing.md),
 
-            if (_selectedFilePath != null)
-              Container(
-                padding: const EdgeInsets.all(AppSpacing.md),
-                decoration: BoxDecoration(
-                  color: AppColors.success.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(AppRadius.md),
-                  border: Border.all(color: AppColors.success),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(
-                      Icons.file_present,
-                      color: AppColors.success,
+            if (_selectedFilePaths.isNotEmpty)
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(AppSpacing.md),
+                    decoration: BoxDecoration(
+                      color: AppColors.success.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(AppRadius.md),
+                      border: Border.all(color: AppColors.success),
                     ),
-                    const SizedBox(width: AppSpacing.md),
-                    Expanded(
-                      child: Text(
-                        _selectedFileName!,
-                        style: const TextStyle(fontSize: 12),
-                        overflow: TextOverflow.ellipsis,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Row(
+                              children: [
+                                const Icon(
+                                  Icons.check_circle,
+                                  color: AppColors.success,
+                                ),
+                                const SizedBox(width: AppSpacing.md),
+                                Text(
+                                  '${_selectedFilePaths.length} file dipilih',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                    color: AppColors.success,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            TextButton.icon(
+                              onPressed: _clearAllFiles,
+                              icon: const Icon(Icons.clear),
+                              label: const Text('Hapus Semua'),
+                              style: TextButton.styleFrom(
+                                foregroundColor: AppColors.danger,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: AppSpacing.md),
+                        ...List.generate(
+                          _selectedFilePaths.length,
+                          (index) => Padding(
+                            padding: const EdgeInsets.only(
+                              bottom: AppSpacing.sm,
+                            ),
+                            child: Row(
+                              children: [
+                                const Icon(
+                                  Icons.insert_drive_file,
+                                  size: 18,
+                                  color: AppColors.secondary,
+                                ),
+                                const SizedBox(width: AppSpacing.md),
+                                Expanded(
+                                  child: Text(
+                                    '${index + 1}. ${_selectedFileNames[index]}',
+                                    style: const TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                IconButton(
+                                  icon: const Icon(
+                                    Icons.delete,
+                                    size: 18,
+                                    color: AppColors.danger,
+                                  ),
+                                  onPressed: () => _removeFile(index),
+                                  padding: EdgeInsets.zero,
+                                  constraints: const BoxConstraints(),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: AppSpacing.md),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: _pickFile,
+                      icon: const Icon(Icons.add, size: 18),
+                      label: const Text('Tambah File'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppColors.secondary,
                       ),
                     ),
-                    IconButton(
-                      icon: const Icon(
-                        Icons.close,
-                        color: AppColors.danger,
-                      ),
-                      onPressed: _removeFile,
-                    ),
-                  ],
-                ),
+                  ),
+                ],
               )
             else
               InkWell(
@@ -475,7 +444,7 @@ class _NilaiBatchImportScreenState extends State<NilaiBatchImportScreen> {
                       ),
                       const SizedBox(height: AppSpacing.md),
                       const Text(
-                        'Klik untuk memilih file',
+                        'Klik untuk memilih file(s)',
                         style: TextStyle(
                           color: AppColors.secondary,
                           fontWeight: FontWeight.w600,
@@ -483,7 +452,7 @@ class _NilaiBatchImportScreenState extends State<NilaiBatchImportScreen> {
                       ),
                       const SizedBox(height: AppSpacing.sm),
                       const Text(
-                        'Format: .xlsx atau .csv',
+                        'Bisa pilih multiple file (.xlsx atau .csv)',
                         style: TextStyle(
                           color: AppColors.subtleText,
                           fontSize: 12,
@@ -529,13 +498,12 @@ class _NilaiBatchImportScreenState extends State<NilaiBatchImportScreen> {
             SizedBox(
               width: double.infinity,
               child: ElevatedButton(
-                onPressed: (_selectedFilePath != null &&
-                        _selectedMatakuliah != null &&
+                onPressed: (_selectedFilePaths.isNotEmpty &&
                         !_isLoading)
                     ? _importData
                     : null,
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: (_selectedFilePath != null)
+                  backgroundColor: (_selectedFilePaths.isNotEmpty)
                       ? AppColors.secondary
                       : AppColors.subtleText,
                   padding: const EdgeInsets.symmetric(

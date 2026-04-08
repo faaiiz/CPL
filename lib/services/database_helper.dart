@@ -1,4 +1,5 @@
 import 'package:sqflite/sqflite.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:path/path.dart';
 import '../models/user_model.dart';
 import '../models/mahasiswa_model.dart';
@@ -56,6 +57,20 @@ class DatabaseHelper {
   Future<Database> _initDatabase() async {
     try {
       print('📦 Starting database initialization...');
+      
+      // Ensure databaseFactory is initialized for FFI
+      // This is a safety check in case the main.dart initialization didn't complete
+      try {
+        // Try to initialize FFI if not already done
+        if (databaseFactory.toString().contains('sqflite')) {
+          sqfliteFfiInit();
+          databaseFactory = databaseFactoryFfi;
+          print('📦 SQLite FFI initialized in database_helper');
+        }
+      } catch (e) {
+        print('⚠️  Note: Using current database factory: $e');
+      }
+      
       final dbPath = await getDatabasesPath();
       print('📦 Database path: $dbPath');
       
@@ -750,6 +765,17 @@ class DatabaseHelper {
     return Matakuliah.fromMap(result.first);
   }
 
+  Future<Matakuliah?> getMatakuliahByNama(String nama) async {
+    final db = await database;
+    final result = await db.query(
+      tableMatakuliah,
+      where: 'nama = ?',
+      whereArgs: [nama],
+    );
+    if (result.isEmpty) return null;
+    return Matakuliah.fromMap(result.first);
+  }
+
   Future<List<Matakuliah>> getAllMatakuliah() async {
     final db = await database;
     final result = await db.query(tableMatakuliah, orderBy: 'semester ASC, nama ASC');
@@ -1131,6 +1157,19 @@ class DatabaseHelper {
       orderBy: 'kode_sub_cpmk ASC',
     );
     return List.generate(maps.length, (i) => SubCPMK.fromMap(maps[i]));
+  }
+
+  Future<SubCPMK?> getSubCPMKByKodeAndMatakuliah(int matakuliahId, String kodeSubCPMK) async {
+    final db = await database;
+    final maps = await db.query(
+      tableSubCPMK,
+      where: 'matakuliah_id = ? AND kode_sub_cpmk = ?',
+      whereArgs: [matakuliahId, kodeSubCPMK],
+    );
+    if (maps.isNotEmpty) {
+      return SubCPMK.fromMap(maps.first);
+    }
+    return null;
   }
 
   Future<SubCPMK?> getSubCPMKById(int id) async {

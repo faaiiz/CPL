@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:file_picker/file_picker.dart';
 import 'dart:async';
+import 'dart:typed_data';
 import '../constants/app_constants.dart';
 import '../services/excel_import_service.dart';
 import '../services/template_service.dart';
@@ -23,10 +25,12 @@ class _ExcelImportScreenState extends State<ExcelImportScreen> {
   final _excelService = ExcelImportService();
   final _dbHelper = DatabaseHelper();
   String? _selectedFilePath;
+  Uint8List? _selectedFileBytes;
   String? _selectedFileName;
   String _importType = 'mahasiswa';
   int? _selectedMatakuliahId; // Untuk Sub CPMK import
   String? _selectedMatakuliahNama; // Untuk Sub CPMK import
+  String? _selectedMatakuliahKode; // Untuk Sub CPMK import (untuk validasi)
   bool _isLoading = false;
   bool _isDownloadingTemplate = false;
   List<String> _importErrors = [];
@@ -69,6 +73,7 @@ class _ExcelImportScreenState extends State<ExcelImportScreen> {
       } else if (_importType == 'sub_cpmk') {
         filePath = await TemplateService.downloadSubCPMKTemplate(
           matakuliahNama: _selectedMatakuliahNama ?? 'Mata Kuliah',
+          kodeMatakuliah: _selectedMatakuliahKode ?? '',
         );
         typeLabel = 'Sub CPMK';
       } else {
@@ -114,11 +119,23 @@ class _ExcelImportScreenState extends State<ExcelImportScreen> {
       );
 
       if (result != null && result.files.isNotEmpty) {
+        final pickedFile = result.files.first;
+        
         setState(() {
-          _selectedFilePath = result.files.first.path;
-          _selectedFileName = result.files.first.name;
+          _selectedFileName = pickedFile.name;
           _importResult = null;
           _importErrors = [];
+          
+          // Handle platform-specific file access
+          if (kIsWeb) {
+            // On web, use bytes
+            _selectedFileBytes = pickedFile.bytes;
+            _selectedFilePath = ''; // Empty path for web, not used
+          } else {
+            // On desktop, use path
+            _selectedFilePath = pickedFile.path;
+            _selectedFileBytes = null;
+          }
         });
       }
     } catch (e) {
@@ -216,7 +233,7 @@ class _ExcelImportScreenState extends State<ExcelImportScreen> {
   }
 
   Future<void> _importData() async {
-    if (_selectedFilePath == null) {
+    if (_selectedFilePath == null && _selectedFileBytes == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Pilih file Excel terlebih dahulu')),
       );
@@ -234,21 +251,48 @@ class _ExcelImportScreenState extends State<ExcelImportScreen> {
 
     try {
       Map<String, dynamic> result;
+      
+      String filePath = _selectedFilePath ?? '';
+      Uint8List? fileBytes = _selectedFileBytes;
+      String? fileName = _selectedFileName;
 
       if (_importType == 'mahasiswa') {
-        result =
-            await _excelService.importMahasiswaFromExcel(_selectedFilePath!);
+        result = await _excelService.importMahasiswaFromExcel(
+          filePath,
+          fileBytes: fileBytes,
+          fileName: fileName,
+        );
       } else if (_importType == 'matakuliah') {
-        result =
-            await _excelService.importMatakuliahFromExcel(_selectedFilePath!);
+        result = await _excelService.importMatakuliahFromExcel(
+          filePath,
+          fileBytes: fileBytes,
+          fileName: fileName,
+        );
       } else if (_importType == 'cpl') {
-        result = await _excelService.importCPLFromExcel(_selectedFilePath!);
+        result = await _excelService.importCPLFromExcel(
+          filePath,
+          fileBytes: fileBytes,
+          fileName: fileName,
+        );
       } else if (_importType == 'cpmk') {
-        result = await _excelService.importCPMKFromExcel(_selectedFilePath!);
+        result = await _excelService.importCPMKFromExcel(
+          filePath,
+          fileBytes: fileBytes,
+          fileName: fileName,
+        );
       } else if (_importType == 'sub_cpmk') {
-        result = await _excelService.importSubCPMKFromExcel(_selectedFilePath!, _selectedMatakuliahId!);
+        result = await _excelService.importSubCPMKFromExcel(
+          filePath,
+          _selectedMatakuliahId!,
+          fileBytes: fileBytes,
+          fileName: fileName,
+        );
       } else {
-        result = await _excelService.importNilaiFromExcel(_selectedFilePath!);
+        result = await _excelService.importNilaiFromExcel(
+          filePath,
+          fileBytes: fileBytes,
+          fileName: fileName,
+        );
       }
 
       setState(() {
@@ -312,6 +356,7 @@ class _ExcelImportScreenState extends State<ExcelImportScreen> {
                   final mk = matakuliahList[index];
                   final mkId = mk.id;
                   final mkNama = mk.nama;
+                  final mkKode = mk.kode;
                   
                   return ListTile(
                     title: Text(mkNama),
@@ -319,6 +364,7 @@ class _ExcelImportScreenState extends State<ExcelImportScreen> {
                       setState(() {
                         _selectedMatakuliahId = mkId;
                         _selectedMatakuliahNama = mkNama;
+                        _selectedMatakuliahKode = mkKode;
                       });
                       Navigator.of(context).pop();
                       

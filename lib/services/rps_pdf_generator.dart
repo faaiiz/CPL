@@ -197,6 +197,9 @@ class RPSPDFGenerator {
     List<Matakuliah> matakuliahList,
     Map<String, List<RPSDetail>> rpsDataMap,
     Map<String, List<SubCPMK>> subCpmkDataMap,
+    Map<String, List<CPMK>> cpmkDataMap,
+    Map<String, List<CPLMaster>> cplDataMap,
+    Map<String, Map<int, Map<int, double>>> rpsDetailSubCpmkBobotMap,
   ) async {
     final pdf = pw.Document();
 
@@ -264,6 +267,9 @@ class RPSPDFGenerator {
     for (final mk in matakuliahList) {
       final rpsDetails = rpsDataMap[mk.kode] ?? [];
       final subCpmks = subCpmkDataMap[mk.kode] ?? [];
+      final cpmks = cpmkDataMap[mk.kode] ?? [];
+      final cpls = cplDataMap[mk.kode] ?? [];
+      final rpsDetailSubCpmkBobots = rpsDetailSubCpmkBobotMap[mk.kode] ?? {};
       
       final rpsGrouped = <int, RPSDetail>{};
       for (final rps in rpsDetails) {
@@ -279,6 +285,8 @@ class RPSPDFGenerator {
             _buildHeader(mk),
             pw.SizedBox(height: 15),
             _buildCourseInfo(mk),
+            pw.SizedBox(height: 20),
+            _buildLearningObjectives(cpmks, cpls, subCpmks),
             pw.SizedBox(height: 20),
             _buildFooter(),
           ],
@@ -312,7 +320,7 @@ class RPSPDFGenerator {
           pageFormat: PdfPageFormat.a4.landscape,
           margin: const pw.EdgeInsets.all(40),
           build: (context) => [
-            _buildAssessmentSummaryTable(rpsDetails, [], [], subCpmks, {}),
+            _buildAssessmentSummaryTable(rpsDetails, cpmks, cpls, subCpmks, rpsDetailSubCpmkBobots),
             pw.SizedBox(height: 20),
             _buildFooter(),
           ],
@@ -507,14 +515,20 @@ class RPSPDFGenerator {
     
     final List<pw.TableRow> rows = [
       pw.TableRow(
-        decoration: const pw.BoxDecoration(color: PdfColors.grey300),
+        decoration: const pw.BoxDecoration(
+          color: PdfColors.grey800,
+          border: pw.TableBorder(
+            top: pw.BorderSide(width: 2),
+            bottom: pw.BorderSide(width: 2),
+          ),
+        ),
         children: [
-          _buildTableCell('Minggu', isHeader: true),
-          _buildTableCell('Topik', isHeader: true),
-          _buildTableCell('Metode', isHeader: true),
-          _buildTableCell('Jenis Penilaian', isHeader: true),
-          _buildTableCell('Sub CPMK', isHeader: true),
-          _buildTableCell('Bobot', isHeader: true),
+          _buildTableHeaderCell('Mg', flex: 1),
+          _buildTableHeaderCell('Topik Pembelajaran', flex: 3),
+          _buildTableHeaderCell('Metode', flex: 2),
+          _buildTableHeaderCell('Penilaian', flex: 2),
+          _buildTableHeaderCell('Sub CPMK', flex: 2),
+          _buildTableHeaderCell('Bobot', flex: 1),
         ],
       ),
     ];
@@ -526,20 +540,34 @@ class RPSPDFGenerator {
       
       rows.add(
         pw.TableRow(
+          decoration: pw.BoxDecoration(
+            border: pw.TableBorder(
+              bottom: pw.BorderSide(width: 0.5, color: PdfColors.grey400),
+            ),
+            color: i.isEven ? PdfColors.grey100 : PdfColors.white,
+          ),
           children: [
-            _buildTableCell('$i'),
-            _buildTableCell(rps?.topik ?? '-'),
-            _buildTableCell(rps?.metodeAjar ?? '-'),
-            _buildTableCell(rps?.jenisNilai ?? '-'),
-            _buildTableCell(subCpmkKodes),
-            _buildTableCell(rps?.bobot != null ? '${rps!.bobot}%' : '-'),
+            _buildTableDataCell('$i', flex: 1, align: pw.TextAlign.center),
+            _buildTableDataCell(rps?.topik ?? '-', flex: 3),
+            _buildTableDataCell(rps?.metodeAjar ?? '-', flex: 2, align: pw.TextAlign.center),
+            _buildTableDataCell(rps?.jenisNilai ?? '-', flex: 2, align: pw.TextAlign.center),
+            _buildTableDataCell(subCpmkKodes, flex: 2, align: pw.TextAlign.center),
+            _buildTableDataCell(rps?.bobot != null ? '${rps!.bobot}%' : '-', flex: 1, align: pw.TextAlign.center),
           ],
         ),
       );
     }
 
     return pw.Table(
-      border: pw.TableBorder.all(),
+      border: pw.TableBorder.all(width: 1, color: PdfColors.grey600),
+      columnWidths: const {
+        0: pw.FlexColumnWidth(1),
+        1: pw.FlexColumnWidth(3),
+        2: pw.FlexColumnWidth(2),
+        3: pw.FlexColumnWidth(2),
+        4: pw.FlexColumnWidth(2),
+        5: pw.FlexColumnWidth(1),
+      },
       children: rows,
     );
   }
@@ -555,14 +583,20 @@ class RPSPDFGenerator {
 
     final List<pw.TableRow> rows = [
       pw.TableRow(
-        decoration: const pw.BoxDecoration(color: PdfColors.grey300),
+        decoration: const pw.BoxDecoration(
+          color: PdfColors.grey800,
+          border: pw.TableBorder(
+            top: pw.BorderSide(width: 2),
+            bottom: pw.BorderSide(width: 2),
+          ),
+        ),
         children: [
-          _buildTableCell('M', isHeader: true),
-          _buildTableCell('Topik', isHeader: true),
-          _buildTableCell('Metode', isHeader: true),
-          _buildTableCell('Jenis Penilaian', isHeader: true),
-          _buildTableCell('Sub CPMK', isHeader: true),
-          _buildTableCell('Bobot', isHeader: true),
+          _buildTableHeaderCell('Mg', flex: 1),
+          _buildTableHeaderCell('Topik Pembelajaran', flex: 3),
+          _buildTableHeaderCell('Metode', flex: 2),
+          _buildTableHeaderCell('Penilaian', flex: 2),
+          _buildTableHeaderCell('Sub CPMK', flex: 2),
+          _buildTableHeaderCell('Bobot', flex: 1),
         ],
       ),
     ];
@@ -574,32 +608,68 @@ class RPSPDFGenerator {
       
       rows.add(
         pw.TableRow(
+          decoration: pw.BoxDecoration(
+            border: pw.TableBorder(
+              bottom: pw.BorderSide(width: 0.5, color: PdfColors.grey400),
+            ),
+            color: i.isEven ? PdfColors.grey100 : PdfColors.white,
+          ),
           children: [
-            _buildTableCell('$i'),
-            _buildTableCell(rps?.topik ?? '-'),
-            _buildTableCell(rps?.metodeAjar ?? '-'),
-            _buildTableCell(rps?.jenisNilai ?? '-'),
-            _buildTableCell(subCpmkKodes),
-            _buildTableCell(rps?.bobot != null ? '${rps!.bobot}%' : '-'),
+            _buildTableDataCell('$i', flex: 1, align: pw.TextAlign.center),
+            _buildTableDataCell(rps?.topik ?? '-', flex: 3),
+            _buildTableDataCell(rps?.metodeAjar ?? '-', flex: 2, align: pw.TextAlign.center),
+            _buildTableDataCell(rps?.jenisNilai ?? '-', flex: 2, align: pw.TextAlign.center),
+            _buildTableDataCell(subCpmkKodes, flex: 2, align: pw.TextAlign.center),
+            _buildTableDataCell(rps?.bobot != null ? '${rps!.bobot}%' : '-', flex: 1, align: pw.TextAlign.center),
           ],
         ),
       );
     }
 
     return pw.Table(
-      border: pw.TableBorder.all(),
+      border: pw.TableBorder.all(width: 1, color: PdfColors.grey600),
+      columnWidths: const {
+        0: pw.FlexColumnWidth(1),
+        1: pw.FlexColumnWidth(3),
+        2: pw.FlexColumnWidth(2),
+        3: pw.FlexColumnWidth(2),
+        4: pw.FlexColumnWidth(2),
+        5: pw.FlexColumnWidth(1),
+      },
       children: rows,
     );
   }
 
-  static pw.Widget _buildTableCell(String text, {bool isHeader = false}) {
+  static pw.Widget _buildTableHeaderCell(String text, {int flex = 1}) {
     return pw.Padding(
-      padding: const pw.EdgeInsets.all(8),
+      padding: const pw.EdgeInsets.all(10),
       child: pw.Text(
         text,
+        maxLines: 2,
+        textAlign: pw.TextAlign.center,
         style: pw.TextStyle(
-          fontSize: 9,
-          fontWeight: isHeader ? pw.FontWeight.bold : pw.FontWeight.normal,
+          fontSize: 10,
+          fontWeight: pw.FontWeight.bold,
+          color: PdfColors.white,
+        ),
+      ),
+    );
+  }
+
+  static pw.Widget _buildTableDataCell(
+    String text, {
+    int flex = 1,
+    pw.TextAlign align = pw.TextAlign.left,
+  }) {
+    return pw.Padding(
+      padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 9),
+      child: pw.Text(
+        text,
+        maxLines: 3,
+        textAlign: align,
+        style: pw.TextStyle(
+          fontSize: 9.5,
+          fontWeight: pw.FontWeight.normal,
         ),
       ),
     );
@@ -698,9 +768,15 @@ class RPSPDFGenerator {
 
     rows.add(
       pw.TableRow(
-        decoration: const pw.BoxDecoration(color: PdfColors.grey300),
+        decoration: const pw.BoxDecoration(
+          color: PdfColors.grey800,
+          border: pw.TableBorder(
+            top: pw.BorderSide(width: 2),
+            bottom: pw.BorderSide(width: 2),
+          ),
+        ),
         children: headerCells
-            .map((cell) => _buildTableCell(cell, isHeader: true))
+            .map((cell) => _buildTableHeaderCell(cell))
             .toList(),
       ),
     );
@@ -708,6 +784,7 @@ class RPSPDFGenerator {
     // Data rows - sort by SubCPMK ID for consistent ordering
     final sortedSubCpmkIds = assessmentData.keys.toList()..sort();
 
+    int rowIndex = 0;
     for (final subCpmkId in sortedSubCpmkIds) {
       final assessments = assessmentData[subCpmkId]!;
       final subCpmkCode = subCpmkMap[subCpmkId] ?? '-';
@@ -733,9 +810,16 @@ class RPSPDFGenerator {
 
       rows.add(
         pw.TableRow(
-          children: cells.map((cell) => _buildTableCell(cell)).toList(),
+          decoration: pw.BoxDecoration(
+            border: pw.TableBorder(
+              bottom: pw.BorderSide(width: 0.5, color: PdfColors.grey400),
+            ),
+            color: rowIndex.isEven ? PdfColors.grey50 : PdfColors.white,
+          ),
+          children: cells.map((cell) => _buildTableDataCell(cell, align: pw.TextAlign.center)).toList(),
         ),
       );
+      rowIndex++;
     }
 
     return pw.Column(
@@ -750,7 +834,7 @@ class RPSPDFGenerator {
         ),
         pw.SizedBox(height: 10),
         pw.Table(
-          border: pw.TableBorder.all(),
+          border: pw.TableBorder.all(width: 1, color: PdfColors.grey600),
           children: rows,
         ),
       ],
