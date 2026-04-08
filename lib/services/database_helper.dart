@@ -890,6 +890,8 @@ class DatabaseHelper {
     return result.map((map) => Nilai.fromMap(map)).toList();
   }
 
+  // ===== NILAI KOMPONEN OPERATIONS =====
+
   // ===== RPS OPERATIONS =====
   Future<int> insertRPS(RPS rps) async {
     final db = await database;
@@ -1897,6 +1899,25 @@ class DatabaseHelper {
       );
     } catch (e) {
       print('Error getting nilai komponen for mahasiswa: $e');
+      rethrow;
+    }
+  }
+
+  /// Get ALL nilai_komponen for a mahasiswa (tanpa filter tahun_ajaran)
+  /// Useful untuk mendapatkan semua data MK dari berbagai tahun akademik
+  Future<List<Map<String, dynamic>>> getNilaiKomponenByMahasiswaAllYears({
+    required int mahasiswaId,
+  }) async {
+    final db = await database;
+    
+    try {
+      return await db.query(
+        tableNilaiKomponen,
+        where: 'mahasiswa_id = ?',
+        whereArgs: [mahasiswaId],
+      );
+    } catch (e) {
+      print('Error getting nilai komponen for mahasiswa (all years): $e');
       rethrow;
     }
   }

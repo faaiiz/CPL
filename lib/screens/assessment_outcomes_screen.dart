@@ -187,10 +187,13 @@ class _AssessmentOutcomesScreenState extends State<AssessmentOutcomesScreen>
       final cpmkDetailList = <Map<String, dynamic>>[];
       final cplDetailList = <Map<String, dynamic>>[];
       
-      // Load semua nilai untuk mahasiswa ini
-      final nilaiList = await _dbHelper.getNilaiByMahasiswa(mahasiswa.id!);
+      // 🎯 FIX: Ambil SEMUA nilai_komponen untuk mahasiswa (tanpa filter tahun_ajaran)
+      // Karena MK bisa tersimpan dengan tahun_ajaran yang berbeda-beda
+      final nilaiKomponenList = await _dbHelper.getNilaiKomponenByMahasiswaAllYears(
+        mahasiswaId: mahasiswa.id!,
+      );
       
-      if (nilaiList.isEmpty) {
+      if (nilaiKomponenList.isEmpty) {
         setState(() {
           _cpmkScores = cpmkScores;
           _cplScores = cplScores;
@@ -201,21 +204,41 @@ class _AssessmentOutcomesScreenState extends State<AssessmentOutcomesScreen>
         return;
       }
       
-      // Proses setiap nilai
-      for (final nilai in nilaiList) {
+      print('📊 Processing ${nilaiKomponenList.length} nilai komponen entries...');
+      
+      // Group by MK untuk melihat unique MK
+      final uniqueMKs = <int>{};
+      for (var nk in nilaiKomponenList) {
+        final mkId = nk['matakuliah_id'] as int?;
+        if (mkId != null) uniqueMKs.add(mkId);
+      }
+      print('🎓 Unique Mata Kuliah: ${uniqueMKs.length} = $uniqueMKs');
+      
+      // Proses setiap nilai_komponen
+      int successCount = 0;
+      for (final nilaiKomponen in nilaiKomponenList) {
         try {
+          final mahasiswaId = nilaiKomponen['mahasiswa_id'] as int?;
+          final matakuliahId = nilaiKomponen['matakuliah_id'] as int?;
+          final tahunAjaran = nilaiKomponen['tahun_ajaran'] as int? ?? 2024;
+          
+          if (mahasiswaId == null || matakuliahId == null) {
+            print('⚠️ Skip entry: mahasiswaId=$mahasiswaId, matakuliahId=$matakuliahId');
+            continue;
+          }
+          
           // 🎯 FIRST: Cek apakah hasil sudah tersimpan di database (persistent)
           final savedResult = await _dbHelper.getCPLCalculationResult(
-            mahasiswa.id!,
-            nilai.matakuliahId,
-            nilai.tahunAjaran,
+            mahasiswaId,
+            matakuliahId,
+            tahunAjaran,
           );
           
           OBECalculationResult? mahasiswaResult;
           
           if (savedResult != null) {
             // 🎯 Gunakan hasil yang sudah disimpan dari database (PERMANENT)
-            print('📦 Memuat hasil CPL dari database untuk MK ${nilai.matakuliahId}');
+            print('📦 Memuat hasil CPL dari database untuk MK $matakuliahId');
             
             // Konvert database row ke OBECalculationResult format
             final subCpmkValues = _parseJsonMapValue(savedResult['sub_cpmk_values'] ?? '');
@@ -224,9 +247,9 @@ class _AssessmentOutcomesScreenState extends State<AssessmentOutcomesScreen>
             final subCpmkBobots = _parseJsonMapValue(savedResult['sub_cpmk_bobots'] ?? '');
             
             mahasiswaResult = OBECalculationResult(
-              mahasiswaId: mahasiswa.id!,
-              matakuliahId: nilai.matakuliahId,
-              tahunAjaran: nilai.tahunAjaran,
+              mahasiswaId: mahasiswaId,
+              matakuliahId: matakuliahId,
+              tahunAjaran: tahunAjaran,
               subCPMKValues: subCpmkValues,
               cpmkValues: cpmkValues,
               cplValues: cplValues,
@@ -234,11 +257,11 @@ class _AssessmentOutcomesScreenState extends State<AssessmentOutcomesScreen>
             );
           } else {
             // 🎯 SECOND: Jika tidak ada di database, calculate ulang
-            print('🔄 Menghitung CPL untuk MK ${nilai.matakuliahId} (tidak ada di database)');
+            print('🔄 Menghitung CPL untuk MK $matakuliahId (tidak ada di database)');
             
             final results = await _obeHelper.calculateAllMahasiswaCPL(
-              nilai.matakuliahId,
-              nilai.tahunAjaran,
+              matakuliahId,
+              tahunAjaran,
             );
             
             if (results.isEmpty) continue;
@@ -246,7 +269,7 @@ class _AssessmentOutcomesScreenState extends State<AssessmentOutcomesScreen>
             // Cari hasil untuk mahasiswa ini
             try {
               mahasiswaResult = results.firstWhere(
-                (r) => r.mahasiswaId == mahasiswa.id!,
+                (r) => r.mahasiswaId == mahasiswaId,
               );
               
               // 🎯 SAVE hasil perhitungan ke database untuk next time (PERMANENT)
@@ -254,15 +277,19 @@ class _AssessmentOutcomesScreenState extends State<AssessmentOutcomesScreen>
               print('✅ CPL hasil disimpan ke database');
             } catch (e) {
               // Tidak ditemukan hasil untuk mahasiswa ini
+              print('⚠️ Tidak ada hasil untuk mahasiswa $mahasiswaId di MK $matakuliahId: $e');
               continue;
             }
           }
           
+          successCount++;
+          print('✅ Processed MK ID $matakuliahId (success count: $successCount)');
+          
           // Get matakuliah info
           final mk = _matakuliahList.firstWhere(
-            (m) => m.id == nilai.matakuliahId,
+            (m) => m.id == matakuliahId,
             orElse: () => Matakuliah(
-              id: nilai.matakuliahId,
+              id: matakuliahId,
               kode: 'N/A',
               nama: 'Unknown',
               semester: 'N/A',
@@ -293,13 +320,13 @@ class _AssessmentOutcomesScreenState extends State<AssessmentOutcomesScreen>
                 id: cpmkId,
                 kodeCPMK: 'CPMK.$cpmkId',
                 deskripsi: '',
-                matakuliahId: nilai.matakuliahId,
+                matakuliahId: matakuliahId,
                 createdAt: DateTime.now(),
               ),
             );
             
             cpmkDetailList.add({
-              'mkId': nilai.matakuliahId,
+              'mkId': matakuliahId,
               'mkKode': mk.kode,
               'mkNama': mk.nama,
               'cpmkId': cpmkId,
@@ -335,7 +362,7 @@ class _AssessmentOutcomesScreenState extends State<AssessmentOutcomesScreen>
             );
             
             cplDetailList.add({
-              'mkId': nilai.matakuliahId,
+              'mkId': matakuliahId,
               'mkKode': mk.kode,
               'mkNama': mk.nama,
               'cplId': cplId,
@@ -346,8 +373,15 @@ class _AssessmentOutcomesScreenState extends State<AssessmentOutcomesScreen>
           }
         } catch (e) {
           // Error calculating untuk nilai ini - continue
+          print('⚠️  Error processing nilai: $e');
         }
       }
+      
+      print('🏁 FINAL RESULT: Processed $successCount MK dari ${nilaiKomponenList.length} entries');
+      print('   - CPMK scores: ${cpmkScores.length} CPMK dengan nilai');
+      print('   - CPL scores: ${cplScores.length} CPL dengan nilai');
+      print('   - CPMK detail rows: ${cpmkDetailList.length}');
+      print('   - CPL detail rows: ${cplDetailList.length}');
       
       setState(() {
         _cpmkScores = cpmkScores;
@@ -396,29 +430,27 @@ class _AssessmentOutcomesScreenState extends State<AssessmentOutcomesScreen>
     required List<double?> statusValues,
     double? tableWidth,
   }) {
-    const headerColor = Color(0xFF2C3E50); // Dark blue-gray header
-    const headerTextColor = Color(0xFFFFFFFF); // White header text
-    const borderColor = Color(0xFFBDC3C7); // Light gray borders
-    const textColor = Color(0xFF2C3E50); // Dark text
-    const rowColor = Color(0xFFFFFFFF); // White
+    const headerColor = Color(0xFF2C3E50);
+    const headerTextColor = Color(0xFFFFFFFF);
+    const borderColor = Color(0xFFBDC3C7);
+    const textColor = Color(0xFF2C3E50);
+    const rowColor = Color(0xFFFFFFFF);
 
-    // Track which IDs have been shown
-    final Set<String> shownIds = {};
+    print('📋 Displaying ${rows.length} rows in table');
 
     // Build header
     final headerCells = headers.map((header) {
       return TableCell(
         child: Container(
           color: headerColor,
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
           alignment: Alignment.center,
           child: Text(
             header,
             style: const TextStyle(
               fontWeight: FontWeight.w600,
-              fontSize: 12,
+              fontSize: 11,
               color: headerTextColor,
-              letterSpacing: 0.5,
             ),
             textAlign: TextAlign.center,
             maxLines: 2,
@@ -432,175 +464,65 @@ class _AssessmentOutcomesScreenState extends State<AssessmentOutcomesScreen>
     final dataRows = List<TableRow>.generate(rows.length, (rowIndex) {
       final row = rows[rowIndex];
       final statusValue = statusValues[rowIndex];
-      final idValue = row[3]; // ID column index
-
-      // Check if this ID has been shown BEFORE this row
-      final isIdDuplicate = shownIds.contains(idValue);
-      
-      // Mark this ID as shown (for next rows)
-      if (!isIdDuplicate) {
-        shownIds.add(idValue);
-      }
+      final isSuccess = statusValue != null && statusValue >= 2.0;
 
       final dataCells = List<TableCell>.generate(row.length, (colIndex) {
         final cellText = row[colIndex];
         final isStatusColumn = colIndex == row.length - 1;
-        final isIdColumn = colIndex == 3;
-        final isRataRataColumn = colIndex == 5; // Rata-rata column
 
-        // For ID column: blank if duplicate, otherwise show
-        if (isIdColumn) {
-          if (!isIdDuplicate) {
-            // Show ID normally
-            return TableCell(
-              child: Container(
-                color: rowColor,
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-                alignment: Alignment.center,
-                child: Text(
-                  cellText,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: textColor,
-                    fontWeight: FontWeight.w600,
-                  ),
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            );
-          } else {
-            // Blank cell for duplicate IDs
-            return TableCell(
-              child: Container(
-                color: rowColor,
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-                alignment: Alignment.center,
-                child: const SizedBox.expand(),
-              ),
-            );
-          }
-        } else if (isRataRataColumn) {
-          // Rata-rata column: blank if ID is duplicate
-          if (isIdDuplicate) {
-            return TableCell(
-              child: Container(
-                color: rowColor,
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-                alignment: Alignment.center,
-                child: const SizedBox.expand(),
-              ),
-            );
-          } else {
-            return TableCell(
-              child: Container(
-                color: rowColor,
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-                alignment: Alignment.center,
-                child: Text(
-                  cellText,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: textColor,
-                    fontWeight: FontWeight.w500,
-                  ),
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            );
-          }
-        } else if (isStatusColumn) {
-          // Status column: blank if ID is duplicate
-          if (isIdDuplicate) {
-            return TableCell(
-              child: Container(
-                color: rowColor,
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-                alignment: Alignment.center,
-                child: const SizedBox.expand(),
-              ),
-            );
-          } else {
-            final isSuccess = statusValue != null && statusValue >= 2.0;
-            return TableCell(
-              child: Container(
-                color: rowColor,
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-                alignment: Alignment.center,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: isSuccess ? const Color(0xFF27AE60) : const Color(0xFFE74C3C),
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: Text(
+        return TableCell(
+          child: Container(
+            color: rowColor,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            alignment: Alignment.center,
+            child: isStatusColumn
+                ? Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: isSuccess ? const Color(0xFF27AE60) : const Color(0xFFE74C3C),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      cellText,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  )
+                : Text(
                     cellText,
                     style: const TextStyle(
-                      color: Colors.white,
                       fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 0.3,
+                      color: textColor,
                     ),
                     textAlign: TextAlign.center,
+                    maxLines: colIndex == 4 ? 3 : 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
-                ),
-              ),
-            );
-          }
-        } else {
-          // Regular cells (Kode MK, Nama, Nilai, Deskripsi)
-          return TableCell(
-            child: Container(
-              color: rowColor,
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-              alignment: Alignment.center,
-              child: Text(
-                cellText,
-                style: const TextStyle(
-                  fontSize: 12,
-                  color: textColor,
-                ),
-                textAlign: TextAlign.center,
-                maxLines: colIndex == 4 ? 4 : 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-          );
-        }
+          ),
+        );
       });
 
       return TableRow(children: dataCells);
     });
 
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Container(
-        width: tableWidth ?? double.infinity,
-        decoration: BoxDecoration(
-          border: Border.all(color: borderColor, width: 1),
-          borderRadius: BorderRadius.circular(4),
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(4),
-          child: Table(
-            columnWidths: {
-              for (int i = 0; i < columnWidths.length; i++)
-                i: FixedColumnWidth(columnWidths[i]),
-            },
-            border: TableBorder(
-              horizontalInside: BorderSide(
-                color: borderColor,
-                width: 1,
-              ),
-              verticalInside: BorderSide(
-                color: borderColor,
-                width: 1,
-              ),
-            ),
-            children: [
-              TableRow(children: headerCells),
-              ...dataRows,
-            ],
-          ),
+    return SizedBox(
+      width: double.infinity,
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Table(
+          columnWidths: {
+            for (int i = 0; i < columnWidths.length; i++)
+              i: FixedColumnWidth(columnWidths[i]),
+          },
+          border: TableBorder.all(color: borderColor, width: 1),
+          children: [
+            TableRow(children: headerCells),
+            ...dataRows,
+          ],
         ),
       ),
     );
@@ -733,215 +655,292 @@ class _AssessmentOutcomesScreenState extends State<AssessmentOutcomesScreen>
   }
 
   Widget _buildDetailView() {
-    return SingleChildScrollView(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Back button and header
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Header section - non-scrollable, more compact
+        Container(
+          padding: const EdgeInsets.only(
+            left: AppSpacing.lg,
+            right: AppSpacing.lg,
+            top: AppSpacing.lg,
+            bottom: AppSpacing.md,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Capaian Pembelajaran Mata Kuliah Mahasiswa',
-                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+              // Back button and header
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Capaian Pembelajaran Mata Kuliah Mahasiswa',
+                          style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+                        ),
+                        Text(
+                          '[${_selectedMahasiswa!.nim}] ${_selectedMahasiswa!.nama}',
+                          style: const TextStyle(fontSize: 11),
+                        ),
+                      ],
                     ),
-                    Text(
-                      '[${_selectedMahasiswa!.nim}] ${_selectedMahasiswa!.nama}',
-                      style: const TextStyle(fontSize: 12),
+                  ),
+                  ElevatedButton.icon(
+                    onPressed: () => setState(() => _selectedMahasiswa = null),
+                    icon: const Icon(Icons.arrow_back, size: 16),
+                    label: const Text('Kembali'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.danger,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: AppSpacing.md,
+                        vertical: AppSpacing.sm,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: AppSpacing.md),
+
+              // Info Box - System Data Summary (more compact)
+              Container(
+                padding: const EdgeInsets.all(AppSpacing.sm),
+                decoration: BoxDecoration(
+                  color: Colors.blue[50],
+                  borderRadius: BorderRadius.circular(AppRadius.md),
+                  border: Border.all(color: Colors.blue[300]!),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.info, color: Colors.blue[700], size: 18),
+                    const SizedBox(width: AppSpacing.sm),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Data Sistem',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.blue[700],
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            'CPMK: ${_cpmkList.length} | CPL: ${_cplList.length} | Nilai CPMK: ${_cpmkScores.length} | Nilai CPL: ${_cplScores.length}',
+                            style: TextStyle(
+                              fontSize: 10,
+                              color: Colors.blue[800],
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ],
                 ),
               ),
-              ElevatedButton.icon(
-                onPressed: () => setState(() => _selectedMahasiswa = null),
-                icon: const Icon(Icons.arrow_back, size: 16),
-                label: const Text('Kembali'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.danger,
-                  foregroundColor: Colors.white,
+              const SizedBox(height: AppSpacing.md),
+
+              // Tabs (more compact)
+              SizedBox(
+                height: 40,
+                child: TabBar(
+                  controller: _tabController,
+                  tabs: const [
+                    Tab(
+                      child: Text('CPMK', style: TextStyle(fontSize: 12)),
+                    ),
+                    Tab(
+                      child: Text('CPL', style: TextStyle(fontSize: 12)),
+                    ),
+                  ],
                 ),
               ),
             ],
           ),
-          const SizedBox(height: AppSpacing.lg),
+        ),
 
-          // Info Box - System Data Summary
-          Container(
-            padding: const EdgeInsets.all(AppSpacing.md),
-            decoration: BoxDecoration(
-              color: Colors.blue[50],
-              borderRadius: BorderRadius.circular(AppRadius.md),
-              border: Border.all(color: Colors.blue[300]!),
+        // Tab content - scrollable and expanded
+        if (_isLoading)
+          const Expanded(
+            child: Padding(
+              padding: EdgeInsets.all(AppSpacing.lg),
+              child: LoadingWidget(),
             ),
-            child: Row(
+          )
+        else
+          Expanded(
+            child: TabBarView(
+              controller: _tabController,
               children: [
-                Icon(Icons.info, color: Colors.blue[700], size: 20),
-                const SizedBox(width: AppSpacing.md),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Data Sistem',
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.blue[700],
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        'CPMK: ${_cpmkList.length} | CPL: ${_cplList.length} | CPMK dengan nilai: ${_cpmkScores.length} | CPL dengan nilai: ${_cplScores.length}',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: Colors.blue[800],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
+                _buildCPMKPage(),
+                _buildCPLPage(),
               ],
             ),
           ),
-          const SizedBox(height: AppSpacing.lg),
-
-          // Tabs
-          TabBar(
-            controller: _tabController,
-            tabs: const [
-              Tab(
-                child: Text('CPMK'),
-              ),
-              Tab(
-                child: Text('CPL'),
-              ),
-            ],
-          ),
-          const SizedBox(height: AppSpacing.lg),
-
-          // Tab content - sized container for TabBarView
-          if (_isLoading)
-            const Padding(
-              padding: EdgeInsets.all(AppSpacing.lg),
-              child: LoadingWidget(),
-            )
-          else
-            SizedBox(
-              height: 500,
-              child: TabBarView(
-                controller: _tabController,
-                children: [
-                  SingleChildScrollView(
-                    child: _buildCPMKPage(),
-                  ),
-                  SingleChildScrollView(
-                    child: _buildCPLPage(),
-                  ),
-                ],
-              ),
-            ),
-        ],
-      ),
+      ],
     );
   }
 
   Widget _buildCPMKPage() {
     if (_selectedMahasiswa == null) {
-      return EmptyStateWidget(
-        message: 'Pilih mahasiswa untuk melihat data CPMK',
-        icon: Icons.person,
-      );
+      return const Center(child: Text('Pilih mahasiswa'));
     }
 
     return Column(
       children: [
-        // CPMK Chart Section
-        Center(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
-            child: _buildCPMKChartContent(),
+        Padding(
+          padding: const EdgeInsets.all(AppSpacing.md),
+          child: ElevatedButton.icon(
+            onPressed: () => _showCPMKChartDialog(),
+            icon: const Icon(Icons.show_chart, size: 18),
+            label: const Text('Lihat Grafik Spider Chart'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFFF69B4),
+              foregroundColor: Colors.white,
+            ),
           ),
         ),
-        const SizedBox(height: AppSpacing.lg),
-        
-        // CPMK Detail Section
-        if (_cpmkScores.isNotEmpty) ...[
-          Padding(
-            padding: const EdgeInsets.all(AppSpacing.md),
-            child: Text(
-              '',
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.bold,
+        Expanded(
+          child: Center(
+            child: SingleChildScrollView(
+              child: Padding(
+                padding: const EdgeInsets.all(AppSpacing.md),
+                child: _buildCPMKDetailTable(),
               ),
             ),
           ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
-            child: _buildCPMKDetailTable(),
-          ),
-          const SizedBox(height: AppSpacing.lg),
-        ] else
-          Padding(
-            padding: const EdgeInsets.all(AppSpacing.lg),
-            child: Text(
-              'Tidak ada data CPMK',
-              style: TextStyle(color: Colors.grey[600]),
-            ),
-          ),
-        const SizedBox(height: AppSpacing.xl),
+        ),
       ],
     );
   }
 
   Widget _buildCPLPage() {
     if (_selectedMahasiswa == null) {
-      return EmptyStateWidget(
-        message: 'Pilih mahasiswa untuk melihat data CPL',
-        icon: Icons.person,
-      );
+      return const Center(child: Text('Pilih mahasiswa'));
     }
 
     return Column(
       children: [
-        // CPL Chart Section
-        Center(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
-            child: _buildCPLChartContent(),
+        Padding(
+          padding: const EdgeInsets.all(AppSpacing.md),
+          child: ElevatedButton.icon(
+            onPressed: () => _showCPLChartDialog(),
+            icon: const Icon(Icons.show_chart, size: 18),
+            label: const Text('Lihat Grafik Spider Chart'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF4DB8FF),
+              foregroundColor: Colors.white,
+            ),
           ),
         ),
-        const SizedBox(height: AppSpacing.lg),
-        
-        // CPL Detail Section
-        if (_cplScores.isNotEmpty) ...[
-          Padding(
-            padding: const EdgeInsets.all(AppSpacing.md),
-            child: Text(
-              '',
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.bold,
+        Expanded(
+          child: Center(
+            child: SingleChildScrollView(
+              child: Padding(
+                padding: const EdgeInsets.all(AppSpacing.md),
+                child: _buildCPLDetailTable(),
               ),
             ),
           ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
-            child: _buildCPLDetailTable(),
-          ),
-          const SizedBox(height: AppSpacing.lg),
-        ] else
-          Padding(
+        ),
+      ],
+    );
+  }
+
+  void _showCPMKChartDialog() {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return Dialog(
+          child: Container(
             padding: const EdgeInsets.all(AppSpacing.lg),
-            child: Text(
-              'Tidak ada data CPL',
-              style: TextStyle(color: Colors.grey[600]),
+            constraints: BoxConstraints(
+              maxWidth: MediaQuery.of(context).size.width * 0.9,
+              maxHeight: MediaQuery.of(context).size.height * 0.8,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Header
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      'Grafik CPMK - Capaian Pembelajaran',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close),
+                      onPressed: () => Navigator.of(context).pop(),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: AppSpacing.md),
+                // Chart
+                Expanded(
+                  child: Center(
+                    child: _buildCPMKChartContent(),
+                  ),
+                ),
+              ],
             ),
           ),
-        const SizedBox(height: AppSpacing.xl),
-      ],
+        );
+      },
+    );
+  }
+
+  void _showCPLChartDialog() {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return Dialog(
+          child: Container(
+            padding: const EdgeInsets.all(AppSpacing.lg),
+            constraints: BoxConstraints(
+              maxWidth: MediaQuery.of(context).size.width * 0.9,
+              maxHeight: MediaQuery.of(context).size.height * 0.8,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Header
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      'Grafik CPL - Capaian Pembelajaran',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close),
+                      onPressed: () => Navigator.of(context).pop(),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: AppSpacing.md),
+                // Chart
+                Expanded(
+                  child: Center(
+                    child: _buildCPLChartContent(),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -1038,228 +1037,78 @@ class _AssessmentOutcomesScreenState extends State<AssessmentOutcomesScreen>
   }
 
   Widget _buildCPMKDetailTable() {
-    // Build detail data dari _cpmkDetailList dan _cpmkScores
-    // Untuk setiap CPMK, hitung rata-rata dari semua matakuliah
-    final detailDataMap = <String, Map<String, dynamic>>{};
-    
-    // Get all matakuliah IDs yang ada di detail list
-    final mkIds = <int>{};
-    for (var item in _cpmkDetailList) {
-      mkIds.add(item['mkId'] as int);
-    }
-    
-    // Build data dari detail list
-    for (var item in _cpmkDetailList) {
-      final mkKode = item['mkKode'] as String?;
-      final mkNama = item['mkNama'] as String?;
-      final cpmkId = item['cpmkId'] as int;
-      final cpmkKode = item['cpmkKode'] as String?;
-      final cpmkDeskripsi = item['cpmkDeskripsi'] as String?;
-      final nilai = item['nilai'] as double?;
-      
-      final key = '${mkKode}_${cpmkId}';
-      if (!detailDataMap.containsKey(key)) {
-        // Calculate rata-rata untuk CPMK ini dari semua MK
-        final rataRata = _cpmkScores[cpmkId] ?? 0.0;
-        
-        detailDataMap[key] = {
-          'mkKode': mkKode,
-          'mkNama': mkNama,
-          'nilai': nilai ?? 0.0,
-          'cpmkId': cpmkId,
-          'cpmkKode': cpmkKode,
-          'cpmkDeskripsi': cpmkDeskripsi,
-          'rataRata': rataRata,
-        };
-      }
-    }
-    
-    // If no detail data, show message with option to show all MK with 0 values
-    if (detailDataMap.isEmpty) {
-      // Fallback: show semua matakuliah dengan score 0
-      if (_matakuliahList.isEmpty) {
-        return Container(
-          padding: const EdgeInsets.all(AppSpacing.md),
+    if (_cpmkDetailList.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.all(AppSpacing.lg),
+        child: Center(
           child: Text(
-            'Tidak ada data mata kuliah',
-            style: TextStyle(color: Colors.grey[600]),
+            'Tidak ada data CPMK',
+            style: TextStyle(color: Colors.grey[600], fontSize: 14),
           ),
-        );
-      }
-      
-      // Build table untuk semua MK dengan semua CPMK mereka, score 0
-      for (final mk in _matakuliahList) {
-        if (mk.id == null) continue;
-        
-        // Get CPMK untuk MK ini
-        final mkCpmks = _cpmkList.where((c) => c.matakuliahId == mk.id).toList();
-        
-        for (final cpmk in mkCpmks) {
-          final key = '${mk.kode}_${cpmk.id}';
-          if (!detailDataMap.containsKey(key)) {
-            detailDataMap[key] = {
-              'mkKode': mk.kode,
-              'mkNama': mk.nama,
-              'nilai': 0.0,
-              'cpmkId': cpmk.id,
-              'cpmkKode': cpmk.kodeCPMK,
-              'cpmkDeskripsi': cpmk.deskripsi,
-              'rataRata': 0.0,
-            };
-          }
-        }
-      }
-    }
-    
-    final detailData = detailDataMap.values.toList();
-    
-    if (detailData.isEmpty) {
-      return Container(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: Text(
-          'Tidak ada data CPMK untuk ditampilkan',
-          style: TextStyle(color: Colors.grey[600]),
         ),
       );
     }
 
-    // Sort by CPMK ID (1-22), then by MK Kode
-    detailData.sort((a, b) {
-      final cpmkIdA = a['cpmkId'] as int? ?? 0;
-      final cpmkIdB = b['cpmkId'] as int? ?? 0;
-      if (cpmkIdA != cpmkIdB) {
-        return cpmkIdA.compareTo(cpmkIdB);
-      }
-      final mkKodeA = a['mkKode'] as String? ?? '';
-      final mkKodeB = b['mkKode'] as String? ?? '';
-      return mkKodeA.compareTo(mkKodeB);
-    });
+    print('📋 CPMK Detail Table: ${_cpmkDetailList.length} entries');
+
+    // Build tabel sederhana: satu baris per mk-cpmk combination
+    final rows = _cpmkDetailList.map((item) {
+      final nilai = (item['nilai'] as num? ?? 0.0).toDouble();
+      final status = nilai >= 2.0 ? 'Tercapai' : 'Tidak Tercapai';
+      
+      return [
+        item['mkKode']?.toString() ?? '-',
+        item['mkNama']?.toString() ?? '-',
+        nilai.toStringAsFixed(2),
+        item['cpmkKode']?.toString() ?? '-',
+        item['cpmkDeskripsi']?.toString() ?? '-',
+        status,
+      ];
+    }).toList();
 
     return _buildStyledDataTable(
-      headers: const ['Kode MK', 'Nama MK', 'Nilai CPMK', 'ID CPMK', 'Deskripsi CPMK', 'Rata-rata CPMK', 'Status'],
-      rows: detailData.map((detail) {
-        return [
-          detail['mkKode']?.toString() ?? '-',
-          detail['mkNama']?.toString() ?? '-',
-          (detail['nilai'] as num? ?? 0.0).toStringAsFixed(2),
-          detail['cpmkId']?.toString() ?? '-',
-          detail['cpmkDeskripsi']?.toString() ?? '-',
-          (detail['rataRata'] as num? ?? 0.0).toStringAsFixed(2),
-          _getStatusLabel((detail['rataRata'] as num?)?.toDouble()),
-        ];
-      }).toList(),
-      columnWidths: const [140, 220, 130, 100, 480, 150, 140],
-      statusValues: detailData.map((detail) => (detail['rataRata'] as num?)?.toDouble()).toList(),
-      tableWidth: MediaQuery.of(context).size.width - 40,
+      headers: const ['Kode MK', 'Nama MK', 'Nilai', 'CPMK', 'Deskripsi CPMK', 'Status'],
+      rows: rows,
+      columnWidths: const [120, 200, 100, 100, 350, 120],
+      statusValues: _cpmkDetailList.map((item) => (item['nilai'] as num?)?.toDouble()).toList(),
     );
   }
 
   Widget _buildCPLDetailTable() {
-    // Build detail data dari _cplDetailList dan _cplScores
-    // Untuk setiap CPL, hitung rata-rata dari semua matakuliah
-    final detailDataMap = <String, Map<String, dynamic>>{};
-    
-    // Build data dari detail list
-    for (var item in _cplDetailList) {
-      final mkKode = item['mkKode'] as String?;
-      final mkNama = item['mkNama'] as String?;
-      final cplId = item['cplId'] as int;
-      final cplKode = item['cplKode'] as String?;
-      final cplDeskripsi = item['cplDeskripsi'] as String?;
-      final nilai = item['nilai'] as double?;
-      
-      final key = '${mkKode}_${cplId}';
-      if (!detailDataMap.containsKey(key)) {
-        // Calculate rata-rata untuk CPL ini dari semua MK
-        final rataRata = _cplScores[cplId] ?? 0.0;
-        
-        detailDataMap[key] = {
-          'mkKode': mkKode,
-          'mkNama': mkNama,
-          'nilai': nilai ?? 0.0,
-          'cplId': cplId,
-          'cplKode': cplKode,
-          'cplDeskripsi': cplDeskripsi,
-          'rataRata': rataRata,
-        };
-      }
-    }
-    
-    // If no detail data, show message with option to show all MK with 0 values
-    if (detailDataMap.isEmpty) {
-      // Fallback: show semua matakuliah dengan score 0
-      if (_matakuliahList.isEmpty) {
-        return Container(
-          padding: const EdgeInsets.all(AppSpacing.md),
+    if (_cplDetailList.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.all(AppSpacing.lg),
+        child: Center(
           child: Text(
-            'Tidak ada data mata kuliah',
-            style: TextStyle(color: Colors.grey[600]),
+            'Tidak ada data CPL',
+            style: TextStyle(color: Colors.grey[600], fontSize: 14),
           ),
-        );
-      }
-      
-      // Build table untuk semua MK dengan semua CPL, score 0
-      // Note: For CPL, we show all CPLs for all MK
-      for (final mk in _matakuliahList) {
-        if (mk.id == null) continue;
-        
-        for (final cpl in _cplList) {
-          final key = '${mk.kode}_${cpl.id}';
-          if (!detailDataMap.containsKey(key)) {
-            detailDataMap[key] = {
-              'mkKode': mk.kode,
-              'mkNama': mk.nama,
-              'nilai': 0.0,
-              'cplId': cpl.id,
-              'cplKode': cpl.kodeCPL,
-              'cplDeskripsi': cpl.deskripsi,
-              'rataRata': 0.0,
-            };
-          }
-        }
-      }
-    }
-    
-    final detailData = detailDataMap.values.toList();
-    
-    if (detailData.isEmpty) {
-      return Container(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: Text(
-          'Tidak ada data CPL untuk ditampilkan',
-          style: TextStyle(color: Colors.grey[600]),
         ),
       );
     }
 
-    // Sort by CPL ID, then by MK Kode
-    detailData.sort((a, b) {
-      final cplIdA = a['cplId'] as int? ?? 0;
-      final cplIdB = b['cplId'] as int? ?? 0;
-      if (cplIdA != cplIdB) {
-        return cplIdA.compareTo(cplIdB);
-      }
-      final mkKodeA = a['mkKode'] as String? ?? '';
-      final mkKodeB = b['mkKode'] as String? ?? '';
-      return mkKodeA.compareTo(mkKodeB);
-    });
+    print('📋 CPL Detail Table: ${_cplDetailList.length} entries');
+
+    // Build tabel sederhana: satu baris per mk-cpl combination
+    final rows = _cplDetailList.map((item) {
+      final nilai = (item['nilai'] as num? ?? 0.0).toDouble();
+      final status = nilai >= 2.0 ? 'Tercapai' : 'Tidak Tercapai';
+      
+      return [
+        item['mkKode']?.toString() ?? '-',
+        item['mkNama']?.toString() ?? '-',
+        nilai.toStringAsFixed(2),
+        item['cplKode']?.toString() ?? '-',
+        item['cplDeskripsi']?.toString() ?? '-',
+        status,
+      ];
+    }).toList();
 
     return _buildStyledDataTable(
-      headers: const ['Kode MK', 'Nama MK', 'Nilai CPL', 'ID CPL', 'Deskripsi CPL', 'Rata-rata CPL', 'Status'],
-      rows: detailData.map((detail) {
-        return [
-          detail['mkKode']?.toString() ?? '-',
-          detail['mkNama']?.toString() ?? '-',
-          (detail['nilai'] as num? ?? 0.0).toStringAsFixed(2),
-          detail['cplId']?.toString() ?? '-',
-          detail['cplDeskripsi']?.toString() ?? '-',
-          (detail['rataRata'] as num? ?? 0.0).toStringAsFixed(2),
-          _getStatusLabel((detail['rataRata'] as num?)?.toDouble()),
-        ];
-      }).toList(),
-      columnWidths: const [140, 220, 130, 100, 480, 150, 140],
-      statusValues: detailData.map((detail) => (detail['rataRata'] as num?)?.toDouble()).toList(),
-      tableWidth: MediaQuery.of(context).size.width - 40,
+      headers: const ['Kode MK', 'Nama MK', 'Nilai', 'CPL', 'Deskripsi CPL', 'Status'],
+      rows: rows,
+      columnWidths: const [120, 200, 100, 100, 350, 120],
+      statusValues: _cplDetailList.map((item) => (item['nilai'] as num?)?.toDouble()).toList(),
     );
   }
 
