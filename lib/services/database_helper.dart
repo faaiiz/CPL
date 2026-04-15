@@ -2003,13 +2003,15 @@ class DatabaseHelper {
   }
 
   /// 🔧 Construct bobot matrix dari RPS Details yang user input
-  /// IMPROVED: Sekarang mengagregasi bobot dari RPS data
-  /// Format: Map<subCpmkId, [aktivitas%, proyek%, kuis%, tugas%, uts%, uas%]>
+  /// FIXED: Query rps_detail_sub_cpmk_bobot untuk bobot per Sub-CPMK
+  /// Format: Map<subCpmkId, [aktivitas, proyek, kuis, tugas, uts, uas]>
   Future<Map<int, List<double>>> _constructBobotMatrixFromRPS(
     int matakuliahId,
     String matkulNama,
   ) async {
     try {
+      final db = await database;
+      
       // Get semua RPS Detail untuk mata kuliah ini
       final rpsDetails = await getRPSDetailByMatakuliah(matakuliahId);
       
@@ -2017,15 +2019,12 @@ class DatabaseHelper {
         return {};
       }
       
-      // Collect all unique Sub-CPMK IDs dan aggregate bobot per komponen
-      // Structure: {subCpmkId: {componentName: totalBobot}}
-      final bobotPerComponent = <int, Map<String, double>>{};
-      
       // Map jenis penilaian ke component index
       final componentMap = <String, int>{
         'aktivitas partisipatif': 0,
         'aktivitas': 0,
         'activity': 0,
+        'hasil proyek': 1,
         'proyek': 1,
         'project': 1,
         'kuis': 2,
@@ -2033,17 +2032,22 @@ class DatabaseHelper {
         'tugas': 3,
         'assignment': 3,
         'uts': 4,
+        'ujian tengah semester': 4,
         'mid-term': 4,
         'uas': 5,
+        'ujian akhir semester': 5,
         'final': 5,
       };
       
       final componentNames = ['aktivitas', 'proyek', 'kuis', 'tugas', 'uts', 'uas'];
       
+      // Collect bobot per Sub-CPMK and component
+      // Structure: {subCpmkId: {componentName: totalBobot}}
+      final bobotPerComponent = <int, Map<String, double>>{};
+      
       // Process each RPS week
       for (final rps in rpsDetails) {
-        if (rps.subCpmkIds == null || rps.subCpmkIds!.isEmpty) continue;
-        if (rps.bobot == null || rps.bobot == 0) continue;
+        if (rps.id == null) continue;
         
         // Determine component type dari jenisNilai
         final jenisNilaiLower = (rps.jenisNilai ?? '').toLowerCase().trim();
@@ -2060,17 +2064,39 @@ class DatabaseHelper {
         }
         
         if (!found) {
-          // Jika tidak match, skip atau gunakan default
-          print('⚠️ Komponen "$jenisNilaiLower" tidak dikenal, skip untuk RPS minggu ${rps.mingguKe}');
+          print('⚠️ Komponen "$jenisNilaiLower" tidak dikenal, skip RPS minggu ${rps.mingguKe}');
           continue;
         }
         
-        // Aggregate bobot ke setiap Sub-CPMK
-        for (final subCpmkId in rps.subCpmkIds!) {
-          bobotPerComponent.putIfAbsent(subCpmkId, () => {});
-          final componentName = componentNames[componentIndex];
-          bobotPerComponent[subCpmkId]![componentName] = 
-            (bobotPerComponent[subCpmkId]![componentName] ?? 0) + (rps.bobot ?? 0);
+        // Query rps_detail_sub_cpmk_bobot untuk bobot per Sub-CPMK di RPS detail ini
+        final bobotQuery = '''
+          SELECT sub_cpmk_id, bobot FROM $tableRPSDetailSubCPMKBobot
+          WHERE rps_detail_id = ?
+        ''';
+        
+        final bobotRows = await db.rawQuery(bobotQuery, [rps.id]);
+        
+        if (bobotRows.isEmpty) {
+          // Fallback: jika tidak ada di rps_detail_sub_cpmk_bobot, gunakan dari subCpmkIds
+          if (rps.subCpmkIds != null && rps.subCpmkIds!.isNotEmpty) {
+            for (final subCpmkId in rps.subCpmkIds!) {
+              bobotPerComponent.putIfAbsent(subCpmkId, () => {});
+              final componentName = componentNames[componentIndex];
+              bobotPerComponent[subCpmkId]![componentName] = 
+                (bobotPerComponent[subCpmkId]![componentName] ?? 0) + (rps.bobot ?? 0);
+            }
+          }
+        } else {
+          // ✅ Gunakan bobot dari rps_detail_sub_cpmk_bobot (per Sub-CPMK)
+          for (final row in bobotRows) {
+            final subCpmkId = row['sub_cpmk_id'] as int;
+            final bobot = (row['bobot'] as num).toDouble();
+            
+            bobotPerComponent.putIfAbsent(subCpmkId, () => {});
+            final componentName = componentNames[componentIndex];
+            bobotPerComponent[subCpmkId]![componentName] = 
+              (bobotPerComponent[subCpmkId]![componentName] ?? 0) + bobot;
+          }
         }
       }
       
@@ -2091,8 +2117,9 @@ class DatabaseHelper {
           bobotList.add(componentBobot[compName] ?? 0.0);
         }
         
+        final totalBobot = bobotList.fold(0.0, (a, b) => a + b);
         result[subCpmkId] = bobotList;
-        print('✅ Sub-CPMK $subCpmkId bobot dari RPS: $bobotList (total: ${bobotList.fold(0.0, (a, b) => a + b)}%)');
+        print('✅ Sub-CPMK $subCpmkId bobot dari RPS: ${bobotList.map((b) => b.toStringAsFixed(2)).toList()} (total: ${totalBobot.toStringAsFixed(2)})');
       }
       
       return result;
