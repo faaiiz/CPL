@@ -443,6 +443,183 @@ void exampleRoundingPrecision() {
 }
 
 /// ============================================================================
+/// CONTOH 7: FISIKA MATEMATIKA I - REAL CASE STUDY
+/// ============================================================================
+/// Contoh lengkap sesuai dengan workflow yang ditunjukkan user
+void exampleFisikaMatematikaI() {
+  print('\n\n🎯 CONTOH 7: Fisika Matematika I (Real Case Study)');
+  print('=' * 70);
+
+  // 📥 INPUT NILAI KOMPONEN (dari database)
+  final nilaiKomponen = {
+    'aktivitas': 87.5,
+    'proyek': 87.5,
+    'kuis': 87.5,
+    'tugas': 87.5,
+    'uts': 60.0,
+    'uas': 90.0,
+  };
+
+  print('\n📥 INPUT NILAI KOMPONEN:');
+  nilaiKomponen.forEach((k, v) => print('   $k: $v'));
+
+  // 🎯 BOBOT SUB-CPMK (dari RPS)
+  final subCpmkBobotMap = {
+    '276': {
+      'aktivitas': 6.0,
+      'proyek': 0.0,
+      'kuis': 0.0,
+      'tugas': 2.5,
+      'uts': 6.0,
+      'uas': 0.0,
+    },
+    '277': {
+      'aktivitas': 0.0,
+      'proyek': 5.0,
+      'kuis': 0.0,
+      'tugas': 0.0,
+      'uts': 6.0,
+      'uas': 0.0,
+    },
+    '278': {
+      'aktivitas': 0.0,
+      'proyek': 0.0,
+      'kuis': 7.0,
+      'tugas': 5.0,
+      'uts': 7.0,
+      'uas': 0.0,
+    },
+    '279': {
+      'aktivitas': 0.0,
+      'proyek': 5.0,
+      'kuis': 0.0,
+      'tugas': 0.0,
+      'uts': 6.0,
+      'uas': 0.0,
+    },
+    '280': {
+      'aktivitas': 0.0,
+      'proyek': 5.0,
+      'kuis': 3.0,
+      'tugas': 2.5,
+      'uts': 0.0,
+      'uas': 8.0,
+    },
+    '281': {
+      'aktivitas': 0.0,
+      'proyek': 5.0,
+      'kuis': 0.0,
+      'tugas': 0.0,
+      'uts': 0.0,
+      'uas': 9.0,
+    },
+    '282': {
+      'aktivitas': 4.0,
+      'proyek': 0.0,
+      'kuis': 0.0,
+      'tugas': 0.0,
+      'uts': 0.0,
+      'uas': 8.0,
+    },
+  };
+
+  print('\n🎯 BOBOT SUB-CPMK (dari RPS):');
+  print('   Sub-CPMK 276: Total=14.5');
+  print('   Sub-CPMK 277: Total=11');
+  print('   Sub-CPMK 278: Total=19');
+  print('   Sub-CPMK 279: Total=11');
+  print('   Sub-CPMK 280: Total=18.5');
+  print('   Sub-CPMK 281: Total=14');
+  print('   Sub-CPMK 282: Total=12');
+
+  // CPMK ← SUB-CPMK MAPPING
+  final cpmkSubCpmkMap = {
+    '4': {
+      '276': 14.5,
+      '277': 11.0,
+      '278': 19.0,
+      '279': 11.0,
+      '280': 18.5,
+      '281': 14.0,
+      '282': 12.0,
+    },
+  };
+
+  print('\n🔗 CPMK ← SUB-CPMK MAPPING:');
+  print('   CPMK 4:');
+  print('      - Sub-CPMK 276 (bobot: 14.5)');
+  print('      - Sub-CPMK 277 (bobot: 11.0)');
+  print('      - Sub-CPMK 278 (bobot: 19.0)');
+  print('      - Sub-CPMK 279 (bobot: 11.0)');
+  print('      - Sub-CPMK 280 (bobot: 18.5)');
+  print('      - Sub-CPMK 281 (bobot: 14.0)');
+  print('      - Sub-CPMK 282 (bobot: 12.0)');
+  print('      Total bobot = 100.0');
+
+  // CALCULATE
+  final helper = OBECalculationHelper();
+  
+  try {
+    // Step 1: Hitung Sub-CPMK
+    print('\n🔢 STEP 1: Hitung Sub-CPMK');
+    print('-' * 70);
+    
+    final subCpmkValues = helper.calculateSubCPMKValues(
+      nilaiKomponen: nilaiKomponen,
+      subCpmkBobotMap: subCpmkBobotMap,
+    );
+
+    print('✅ Hasil Sub-CPMK:');
+    subCpmkValues.forEach((id, nilai) {
+      print('   Sub-CPMK $id: $nilai');
+    });
+
+    // Step 2: Hitung CPMK
+    print('\n🔢 STEP 2: Hitung CPMK');
+    print('-' * 70);
+    
+    final cpmkValues = helper.calculateCPMKValues(
+      subCpmkValues: subCpmkValues,
+      cpmkSubCpmkMap: cpmkSubCpmkMap,
+    );
+
+    print('✅ Hasil CPMK:');
+    cpmkValues.forEach((id, nilai) {
+      print('   CPMK $id: $nilai');
+    });
+
+    // Verify calculation
+    print('\n📊 VERIFIKASI PERHITUNGAN:');
+    print('-' * 70);
+    
+    final expectedValues = {
+      '276': 76.12,
+      '277': 72.50,
+      '278': 77.37,
+      '279': 72.50,
+      '280': 88.58,
+      '281': 89.11,
+      '282': 89.17,
+    };
+
+    print('Expected vs Actual Sub-CPMK:');
+    expectedValues.forEach((id, expected) {
+      final actual = subCpmkValues[id] ?? 0.0;
+      final match = (expected - actual).abs() < 0.01 ? '✅' : '❌';
+      print('   $match Sub-CPMK $id: Expected=$expected, Actual=$actual');
+    });
+
+    final expectedCpmk = 81.25;
+    final actualCpmk = cpmkValues['4'] ?? 0.0;
+    final cpmkMatch = (expectedCpmk - actualCpmk).abs() < 0.01 ? '✅' : '❌';
+    print('   $cpmkMatch CPMK 4: Expected=$expectedCpmk, Actual=$actualCpmk');
+
+  } catch (e) {
+    print('❌ Error: $e');
+  }
+}
+
+/// ============================================================================
 /// MAIN FUNCTION - JALANKAN SEMUA CONTOH
 /// ============================================================================
 void main() {
@@ -457,6 +634,7 @@ void main() {
   exampleWithZeroBobot();
   exampleResponseModel();
   exampleRoundingPrecision();
+  exampleFisikaMatematikaI();
 
   print('\n\n✅ Semua contoh selesai!');
 }

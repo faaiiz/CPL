@@ -6,19 +6,25 @@ import 'database_helper.dart';
 /// Menghitung Nilai Sub-CPMK, CPMK, dan CPL menggunakan pendekatan OBE
 /// 
 /// ALUR PERHITUNGAN:
-/// Nilai Komponen (aktivitas, proyek, kuis, tugas, uts, uas)
-///     ↓
-/// Sub-CPMK (Abaikan bobot 0, normalisasi bobot aktif, hitung weighted avg)
-///     ↓
-/// CPMK (Weighted average dari Sub-CPMK menggunakan 'total' sebagai bobot)
-///     ↓
-/// CPL (Weighted aggregation dari CPMK - BUKAN simple average)
-///
+/// 
+/// 1️⃣ SUB-CPMK CALCULATION:
+///    Formula: Sub-CPMK_i = Σ(nilai_komponen_j × bobot_ij) / total_bobot_i
+///    
+///    Contoh: Sub-CPMK 276 = (87.5×6 + 87.5×2.5 + 60×6) / 14.5 = 76.12
+///    
+/// 2️⃣ CPMK CALCULATION:
+///    Formula: CPMK = Σ(Sub-CPMK_i × bobot_total_i) / Σ(bobot_total_i)
+///    
+///    Contoh: CPMK 4 = ((76.12×14.5) + (72.50×11) + ... + (89.17×12)) / 100 = 81.25
+///    
+/// 3️⃣ CPL CALCULATION (Optional):
+///    Formula: CPL = Σ(CPMK_i × bobot_cpmk_i) / Σ(bobot_cpmk_i)
+///    
 /// ✅ OBE COMPLIANCE:
 /// - MANDATORY: Semua perhitungan WAJIB melalui Sub-CPMK (bukan langsung ke CPMK)
 /// - Hanya komponen dengan bobot > 0 yang dihitung
 /// - Bobot HARUS data-driven dari database (TIDAK hardcoded)
-/// - Pembulatan 2 desimal
+/// - Pembulatan 2 desimal di setiap hasil
 /// - Total bobot harus > 0 (throw error jika tidak)
 /// - Missing values throw error (TIDAK default ke 0)
 /// - Weights > 0 dan tervalidasi sebelum digunakan
@@ -30,6 +36,7 @@ import 'database_helper.dart';
 /// 4. ✅ Changed CPL to use weighted aggregation
 /// 5. ✅ Improved error messages with actionable guidance
 /// 6. ✅ Added optional validation flags
+/// 7. ✅ Use direct bobot formula (no intermediate normalization steps)
 class OBECalculationHelper {
   final DatabaseHelper _dbHelper;
   final OBEValidationConfig _validationConfig;
@@ -111,15 +118,14 @@ class OBECalculationHelper {
   ///   (Bobot HARUS dari database, TIDAK hardcoded)
   ///
   /// ALGORITMA:
-  /// 1. Untuk setiap Sub-CPMK:
-  ///    - Validasi bahwa bobot > 0 ada (jika semua 0, throw error)
-  ///    - Hitung total bobot aktif (bobot > 0)
-  ///    - Normalisasi bobot: bobot_normal = bobot / total_bobot
-  ///    - Hitung nilai: Σ(bobot_normal × nilai_komponen)
-  ///    - Validasi nilai ada di range [0, 100]
-  /// 2. Return Map<subCpmkId, nilai>
+  /// Sub-CPMK_i = Σ(nilai_komponen_j × bobot_ij) / total_bobot_i
+  /// 
+  /// Contoh:
+  /// Sub-CPMK 276 = (87.5×6 + 87.5×2.5 + 60×6) / 14.5
+  ///              = 1103.75 / 14.5
+  ///              = 76.12
   ///
-  /// OUTPUT: {"sub1": 85.50, "sub2": 78.25, ...}
+  /// OUTPUT: {"sub1": 76.12, "sub2": 72.50, ...}
   /// 
   /// ❌ THROWS if:
   /// - nilaiKomponen kosong
@@ -169,7 +175,8 @@ class OBECalculationHelper {
         _validateTotalWeights(context, totalBobot);
       }
 
-      // Hitung nilai Sub-CPMK
+      // Hitung nilai Sub-CPMK menggunakan formula:
+      // Sub-CPMK = Σ(nilai_komponen × bobot) / total_bobot
       double nilaiSub = 0.0;
 
       activeBobots.forEach((komponenNama, bobot) {
@@ -177,13 +184,15 @@ class OBECalculationHelper {
         final nilaiKomp =
             _getValidatedComponentValue(context, nilaiKomponen, komponenNama);
 
-        // Normalisasi bobot dan hitung kontribusi
-        final bobotNormal = bobot / totalBobot;
-        nilaiSub += bobotNormal * nilaiKomp;
+        // Hitung kontribusi weighted (bobot digunakan langsung)
+        nilaiSub += nilaiKomp * bobot;
       });
 
+      // Bagi dengan total bobot untuk mendapatkan nilai akhir
+      final nilaiSubCpmk = nilaiSub / totalBobot;
+
       // Roundup ke 2 desimal
-      result[subCpmkId] = _roundToTwoDecimals(nilaiSub);
+      result[subCpmkId] = _roundToTwoDecimals(nilaiSubCpmk);
     });
 
     return result;
@@ -192,22 +201,27 @@ class OBECalculationHelper {
   /// 📊 STEP 2: Hitung nilai CPMK dari nilai Sub-CPMK
   ///
   /// INPUT:
-  /// - subCpmkValues: {"sub1": 85.50, "sub2": 78.25, ...}
+  /// - subCpmkValues: {"sub1": 76.12, "sub2": 72.50, ...}
+  ///   (Hasil dari calculateSubCPMKValues)
   /// - cpmkSubCpmkMap: {
   ///     "cpmk1": {
-  ///       "sub1": 20,  // bobot total Sub-CPMK dalam CPMK (dari database)
-  ///       "sub2": 15,
-  ///       "sub3": 15
+  ///       "sub1": 14.5,  // bobot total Sub-CPMK (dari RPS)
+  ///       "sub2": 11,
+  ///       "sub3": 19,
+  ///       ...
   ///     }
   ///   }
+  ///   (Bobot total harus sum ke 100)
   ///
   /// ALGORITMA:
-  /// 1. Untuk setiap CPMK:
-  ///    - Hitung weighted average: Σ(nilai_sub × bobot_total_sub) / Σ(bobot_total_sub)
-  ///    - Validasi bobot > 0 ada
-  /// 2. Return Map<cpmkId, nilai>
+  /// CPMK = Σ(nilai_sub × bobot_total_sub) / Σ(bobot_total_sub)
+  /// 
+  /// Contoh:
+  /// CPMK 4 = ((76.12×14.5) + (72.50×11) + (77.37×19) + (72.50×11) + (88.58×18.5) + (89.11×14) + (89.17×12)) / 100
+  ///        = 8125.08 / 100
+  ///        = 81.25
   ///
-  /// OUTPUT: {"cpmk1": 82.75}
+  /// OUTPUT: {"cpmk1": 81.25}
   Map<String, double> calculateCPMKValues({
     required Map<String, double> subCpmkValues,
     required Map<String, Map<String, double>> cpmkSubCpmkMap,
