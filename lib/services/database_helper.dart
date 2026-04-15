@@ -2003,49 +2003,109 @@ class DatabaseHelper {
   }
 
   /// 🔧 Construct bobot matrix dari RPS Details yang user input
-  /// Saat ini: Fallback ke equal distribution karena RPS Details tidak store
-  /// bobot komponen detail per Sub-CPMK
+  /// IMPROVED: Sekarang mengagregasi bobot dari RPS data
+  /// Format: Map<subCpmkId, [aktivitas%, proyek%, kuis%, tugas%, uts%, uas%]>
   Future<Map<int, List<double>>> _constructBobotMatrixFromRPS(
     int matakuliahId,
     String matkulNama,
   ) async {
     try {
-      // Get semua Sub-CPMK untuk mata kuliah ini
-      final subCpmks = await getRPSDetailByMatakuliah(matakuliahId);
+      // Get semua RPS Detail untuk mata kuliah ini
+      final rpsDetails = await getRPSDetailByMatakuliah(matakuliahId);
       
-      if (subCpmks.isEmpty) {
+      if (rpsDetails.isEmpty) {
         return {};
       }
       
-      // Collect all unique Sub-CPMK IDs
-      final allSubCpmkIds = <int>{};
-      for (final rps in subCpmks) {
-        if (rps.subCpmkIds != null) {
-          allSubCpmkIds.addAll(rps.subCpmkIds!);
+      // Collect all unique Sub-CPMK IDs dan aggregate bobot per komponen
+      // Structure: {subCpmkId: {componentName: totalBobot}}
+      final bobotPerComponent = <int, Map<String, double>>{};
+      
+      // Map jenis penilaian ke component index
+      final componentMap = <String, int>{
+        'aktivitas partisipatif': 0,
+        'aktivitas': 0,
+        'activity': 0,
+        'proyek': 1,
+        'project': 1,
+        'kuis': 2,
+        'quiz': 2,
+        'tugas': 3,
+        'assignment': 3,
+        'uts': 4,
+        'mid-term': 4,
+        'uas': 5,
+        'final': 5,
+      };
+      
+      final componentNames = ['aktivitas', 'proyek', 'kuis', 'tugas', 'uts', 'uas'];
+      
+      // Process each RPS week
+      for (final rps in rpsDetails) {
+        if (rps.subCpmkIds == null || rps.subCpmkIds!.isEmpty) continue;
+        if (rps.bobot == null || rps.bobot == 0) continue;
+        
+        // Determine component type dari jenisNilai
+        final jenisNilaiLower = (rps.jenisNilai ?? '').toLowerCase().trim();
+        int componentIndex = 0;
+        
+        // Cari component yang match
+        bool found = false;
+        for (final entry in componentMap.entries) {
+          if (jenisNilaiLower.contains(entry.key)) {
+            componentIndex = entry.value;
+            found = true;
+            break;
+          }
+        }
+        
+        if (!found) {
+          // Jika tidak match, skip atau gunakan default
+          print('⚠️ Komponen "$jenisNilaiLower" tidak dikenal, skip untuk RPS minggu ${rps.mingguKe}');
+          continue;
+        }
+        
+        // Aggregate bobot ke setiap Sub-CPMK
+        for (final subCpmkId in rps.subCpmkIds!) {
+          bobotPerComponent.putIfAbsent(subCpmkId, () => {});
+          final componentName = componentNames[componentIndex];
+          bobotPerComponent[subCpmkId]![componentName] = 
+            (bobotPerComponent[subCpmkId]![componentName] ?? 0) + (rps.bobot ?? 0);
         }
       }
       
-      if (allSubCpmkIds.isEmpty) {
+      if (bobotPerComponent.isEmpty) {
+        print('⚠️ Tidak ada bobot dari RPS yang dapat diagregasi');
         return {};
       }
       
-      // Saat ini: Gunakan equal distribution untuk semua Sub-CPMK
-      // (RPS Details tidak menyimpan bobot komponen detail)
-      final equalBobot = [15.0 / 6, 15.0 / 6, 15.0 / 6, 15.0 / 6, 15.0 / 6, 15.0 / 6];
+      // Convert ke List<double> format
       final result = <int, List<double>>{};
-      
-      for (final subCpmkId in allSubCpmkIds) {
-        result[subCpmkId] = List.from(equalBobot);
+      for (final entry in bobotPerComponent.entries) {
+        final subCpmkId = entry.key;
+        final componentBobot = entry.value;
+        
+        // Build list: [aktivitas, proyek, kuis, tugas, uts, uas]
+        final bobotList = <double>[];
+        for (final compName in componentNames) {
+          bobotList.add(componentBobot[compName] ?? 0.0);
+        }
+        
+        result[subCpmkId] = bobotList;
+        print('✅ Sub-CPMK $subCpmkId bobot dari RPS: $bobotList (total: ${bobotList.fold(0.0, (a, b) => a + b)}%)');
       }
       
       return result;
     } catch (e) {
+      print('❌ Error constructing bobot dari RPS: $e');
       return {};
     }
   }
 
   /// 📊 Fallback: Equal distribution bobot untuk semua komponen
   /// Default untuk mata kuliah yang tidak dikonfigurasi
+  /// Index: [Aktivitas=0, Proyek=1, Kuis=2, Tugas=3, UTS=4, UAS=5]
+  /// Total = 100%, masing-masing = 100/6 ≈ 16.67%
   Future<Map<int, List<double>>> _getBobotMatrixEqualDistribution(
     int matakuliahId,
   ) async {
@@ -2068,8 +2128,8 @@ class DatabaseHelper {
         return {};
       }
       
-      // Equal distribution: masing-masing komponen dapat 15/6 = 2.5
-      final equalBobot = [15.0 / 6, 15.0 / 6, 15.0 / 6, 15.0 / 6, 15.0 / 6, 15.0 / 6];
+      // FIXED: Equal distribution 100% untuk 6 komponen
+      final equalBobot = [100.0 / 6, 100.0 / 6, 100.0 / 6, 100.0 / 6, 100.0 / 6, 100.0 / 6];
       
       final matrixResult = <int, List<double>>{};
       for (final row in result) {
@@ -2187,5 +2247,58 @@ class DatabaseHelper {
   Future<void> closeDatabase() async {
     final db = await database;
     await db.close();
+  }
+
+  /// Get CPL ← CPMK mappings from cpl_cpmk table
+  /// Returns list of mappings: [{cpl_id, cpmk_id, bobot}, ...]
+  /// Returns null if table doesn't exist or is empty (CPL is optional)
+  Future<List<Map<String, dynamic>>?> getAllCPLCPMKMappings() async {
+    try {
+      final db = await database;
+      // Try to query cpl_cpmk table (may not exist)
+      final result = await db.query('cpl_cpmk');
+      return result.isEmpty ? null : result;
+    } catch (e) {
+      // Table doesn't exist or other error - CPL is optional
+      print('ℹ️ CPL←CPMK mappings not available (optional): $e');
+      return null;
+    }
+  }
+
+  /// Get Sub-CPMK component bobot from getBobotMatrixForMatakuliah
+  /// This is a wrapper around the existing bobot loading logic
+  /// Returns Map<subCpmkId, Map<componentName, bobot>>
+  /// Returns null if no data available
+  Future<Map<String, Map<String, double>>?> getSubCPMKComponentBobots(int matakuliahId) async {
+    try {
+      final bobotMatrix = await getBobotMatrixForMatakuliah(
+        matakuliahId: matakuliahId,
+      );
+
+      if (bobotMatrix.isEmpty) {
+        return null;
+      }
+
+      // Convert Map<int, List<double>> to Map<String, Map<String, double>>
+      const componentNames = ['aktivitas', 'proyek', 'kuis', 'tugas', 'uts', 'uas'];
+      final result = <String, Map<String, double>>{};
+
+      for (final entry in bobotMatrix.entries) {
+        final subCpmkId = entry.key;
+        final bobotList = entry.value;
+        final bobotMap = <String, double>{};
+
+        for (int i = 0; i < componentNames.length && i < bobotList.length; i++) {
+          bobotMap[componentNames[i]] = bobotList[i];
+        }
+
+        result[subCpmkId.toString()] = bobotMap;
+      }
+
+      return result.isEmpty ? null : result;
+    } catch (e) {
+      print('ℹ️ Could not load component bobots for MK $matakuliahId: $e');
+      return null;
+    }
   }
 }

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../constants/app_constants.dart';
 import '../models/mahasiswa_model.dart';
@@ -49,6 +50,8 @@ class _AssessmentOutcomesScreenState extends State<AssessmentOutcomesScreen>
 
   @override
   void dispose() {
+    // Cancel loading timeout timer jika masih aktif
+    _loadingTimeoutTimer?.cancel();
     _tabController.dispose();
     super.dispose();
   }
@@ -152,6 +155,10 @@ class _AssessmentOutcomesScreenState extends State<AssessmentOutcomesScreen>
     _showLoadingDialog();
     _loadMahasiswaScores(mahasiswa);
   }
+  
+  /// Timeout constant untuk loading data (30 detik)
+  static const Duration _loadingTimeout = Duration(seconds: 30);
+  Timer? _loadingTimeoutTimer;
 
   void _showLoadingDialog() {
     showDialog(
@@ -179,11 +186,53 @@ class _AssessmentOutcomesScreenState extends State<AssessmentOutcomesScreen>
   }
 
   void _loadMahasiswaScores(Mahasiswa mahasiswa) async {
+    // Cancel any existing timeout timer
+    _loadingTimeoutTimer?.cancel();
+    
+    // Start timeout timer - jika belum selesai dalam _loadingTimeout, tutup dialog dengan error
+    _loadingTimeoutTimer = Timer(_loadingTimeout, () {
+      if (mounted) {
+        print('❌ TIMEOUT: Gagal memuat data dalam ${_loadingTimeout.inSeconds} detik');
+        
+        // Close loading dialog
+        try {
+          Navigator.of(context, rootNavigator: true).pop();
+        } catch (e) {
+          print('Warn: Error closing dialog: $e');
+        }
+        
+        // Show timeout error notification
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text(
+              '⏱️ Request Time Out. Tidak ada data untuk mahasiswa ini.',
+            ),
+            duration: const Duration(seconds: 6),
+            backgroundColor: Colors.red,
+            action: SnackBarAction(
+              label: 'Tutup',
+              onPressed: () {},
+            ),
+          ),
+        );
+        
+        // Reset loading state
+        setState(() {
+          _cpmkScores = {};
+          _cplScores = {};
+          _cpmkDetailList = [];
+          _cplDetailList = [];
+          _isLoading = false;
+        });
+      }
+    });
+    
     setState(() => _isLoading = true);
 
     try {
-      final cpmkScores = <int, double?>{};
-      final cplScores = <int, double?>{};
+      // 🎯 FIX BUG #3: Use proper accumulation for average calculation
+      final Map<int, Map<String, double>> cpmkAccumulation = {};  // {id: {sum: x, count: y}}
+      final Map<int, Map<String, double>> cplAccumulation = {};   // {id: {sum: x, count: y}}
       final cpmkDetailList = <Map<String, dynamic>>[];
       final cplDetailList = <Map<String, dynamic>>[];
       
@@ -195,8 +244,8 @@ class _AssessmentOutcomesScreenState extends State<AssessmentOutcomesScreen>
       
       if (nilaiKomponenList.isEmpty) {
         setState(() {
-          _cpmkScores = cpmkScores;
-          _cplScores = cplScores;
+          _cpmkScores = {};
+          _cplScores = {};
           _cpmkDetailList = cpmkDetailList;
           _cplDetailList = cplDetailList;
           _isLoading = false;
@@ -241,27 +290,27 @@ class _AssessmentOutcomesScreenState extends State<AssessmentOutcomesScreen>
             print('📦 Memuat hasil CPL dari database untuk MK $matakuliahId');
             
             // Konvert database row ke OBECalculationResult format
-            final subCpmkValues = _parseJsonMapValue(savedResult['sub_cpmk_values'] ?? '');
-            final cpmkValues = _parseJsonMapValue(savedResult['cpmk_values'] ?? '');
-            final cplValues = _parseJsonMapValue(savedResult['cpl_values'] ?? '');
+            final subCpmkValues = _convertToStringKeyMap(_parseJsonMapValue(savedResult['sub_cpmk_values'] ?? ''));
+            final cpmkValues = _convertToStringKeyMap(_parseJsonMapValue(savedResult['cpmk_values'] ?? ''));
+            final cplValues = _convertToStringKeyMap(_parseJsonMapValue(savedResult['cpl_values'] ?? ''));
             final subCpmkBobots = _parseJsonMapValue(savedResult['sub_cpmk_bobots'] ?? '');
             
             mahasiswaResult = OBECalculationResult(
               mahasiswaId: mahasiswaId,
               matakuliahId: matakuliahId,
               tahunAjaran: tahunAjaran,
-              subCPMKValues: subCpmkValues,
+              subCpmkValues: subCpmkValues,
               cpmkValues: cpmkValues,
               cplValues: cplValues,
-              subCpmkBobots: subCpmkBobots.isNotEmpty ? subCpmkBobots : null,
+              subCpmkBobots: subCpmkBobots.isNotEmpty ? subCpmkBobots.cast<int, double>() : null,
             );
           } else {
             // 🎯 SECOND: Jika tidak ada di database, calculate ulang
             print('🔄 Menghitung CPL untuk MK $matakuliahId (tidak ada di database)');
             
-            final results = await _obeHelper.calculateAllMahasiswaCPL(
-              matakuliahId,
-              tahunAjaran,
+            final results = await _obeHelper.calculateBatchOBEResultsForMatakuliah(
+              matakuliahId: matakuliahId,
+              tahunAjaran: tahunAjaran,
             );
             
             if (results.isEmpty) continue;
@@ -302,15 +351,16 @@ class _AssessmentOutcomesScreenState extends State<AssessmentOutcomesScreen>
           // Process CPMK values
           final cpmkValues = mahasiswaResult.cpmkValues;
           for (final entry in cpmkValues.entries) {
-            final cpmkId = entry.key;
+            final cpmkId = int.tryParse(entry.key) ?? 0;
+            if (cpmkId == 0) continue;
             final nilaiCpmk = entry.value;
             
-            // Aggregate values untuk average calculation
-            if (!cpmkScores.containsKey(cpmkId)) {
-              cpmkScores[cpmkId] = nilaiCpmk;
+            // 🎯 FIX BUG #3: Proper accumulation instead of incorrect averaging
+            if (!cpmkAccumulation.containsKey(cpmkId)) {
+              cpmkAccumulation[cpmkId] = {'sum': nilaiCpmk, 'count': 1.0};
             } else {
-              // Accumulate untuk average nanti
-              cpmkScores[cpmkId] = (cpmkScores[cpmkId]! + nilaiCpmk) / 2;
+              cpmkAccumulation[cpmkId]!['sum'] = cpmkAccumulation[cpmkId]!['sum']! + nilaiCpmk;
+              cpmkAccumulation[cpmkId]!['count'] = cpmkAccumulation[cpmkId]!['count']! + 1.0;
             }
             
             // Add detail
@@ -339,14 +389,16 @@ class _AssessmentOutcomesScreenState extends State<AssessmentOutcomesScreen>
           // Process CPL values
           final cplValues = mahasiswaResult.cplValues;
           for (final entry in cplValues.entries) {
-            final cplId = entry.key;
+            final cplId = int.tryParse(entry.key) ?? 0;
+            if (cplId == 0) continue;
             final nilaiCpl = entry.value;
             
-            // Aggregate values
-            if (!cplScores.containsKey(cplId)) {
-              cplScores[cplId] = nilaiCpl;
+            // 🎯 FIX BUG #3: Proper accumulation instead of incorrect averaging
+            if (!cplAccumulation.containsKey(cplId)) {
+              cplAccumulation[cplId] = {'sum': nilaiCpl, 'count': 1.0};
             } else {
-              cplScores[cplId] = (cplScores[cplId]! + nilaiCpl) / 2;
+              cplAccumulation[cplId]!['sum'] = cplAccumulation[cplId]!['sum']! + nilaiCpl;
+              cplAccumulation[cplId]!['count'] = cplAccumulation[cplId]!['count']! + 1.0;
             }
             
             // Add detail
@@ -377,6 +429,25 @@ class _AssessmentOutcomesScreenState extends State<AssessmentOutcomesScreen>
         }
       }
       
+      // 🎯 FIX BUG #3: Calculate final averages from accumulation maps
+      final Map<int, double?> cpmkScores = {};
+      for (final entry in cpmkAccumulation.entries) {
+        final cpmkId = entry.key;
+        final data = entry.value;
+        final sum = data['sum'] ?? 0.0;
+        final count = data['count'] ?? 1.0;
+        cpmkScores[cpmkId] = count > 0 ? sum / count : null;
+      }
+      
+      final Map<int, double?> cplScores = {};
+      for (final entry in cplAccumulation.entries) {
+        final cplId = entry.key;
+        final data = entry.value;
+        final sum = data['sum'] ?? 0.0;
+        final count = data['count'] ?? 1.0;
+        cplScores[cplId] = count > 0 ? sum / count : null;
+      }
+      
       print('🏁 FINAL RESULT: Processed $successCount MK dari ${nilaiKomponenList.length} entries');
       print('   - CPMK scores: ${cpmkScores.length} CPMK dengan nilai');
       print('   - CPL scores: ${cplScores.length} CPL dengan nilai');
@@ -402,12 +473,19 @@ class _AssessmentOutcomesScreenState extends State<AssessmentOutcomesScreen>
         }
       }
       
+      // Cancel timeout timer karena loading selesai
+      _loadingTimeoutTimer?.cancel();
+      
       // Close loading dialog
       if (mounted) {
         Navigator.of(context).pop();
       }
     } catch (e) {
       print('❌ Error loading scores for mahasiswa: $e');
+      
+      // Cancel timeout timer
+      _loadingTimeoutTimer?.cancel();
+      
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Error: ${e.toString()}')),
@@ -418,17 +496,11 @@ class _AssessmentOutcomesScreenState extends State<AssessmentOutcomesScreen>
     }
   }
 
-  String _getStatusLabel(double? score) {
-    if (score == null) return 'N/A';
-    return score >= 2.0 ? 'Tercapai' : 'Tidak Tercapai';
-  }
-
   Widget _buildStyledDataTable({
     required List<String> headers,
     required List<List<String>> rows,
     required List<double> columnWidths,
     required List<double?> statusValues,
-    double? tableWidth,
   }) {
     const headerColor = Color(0xFF2C3E50);
     const headerTextColor = Color(0xFFFFFFFF);
@@ -1135,6 +1207,15 @@ class _AssessmentOutcomesScreenState extends State<AssessmentOutcomesScreen>
       print('❌ Error parsing JSON map: $e');
       return {};
     }
+  }
+
+  /// Convert Map<int, double> ke Map<String, double>
+  Map<String, double> _convertToStringKeyMap(Map<int, double> intMap) {
+    final result = <String, double>{};
+    for (final entry in intMap.entries) {
+      result[entry.key.toString()] = entry.value;
+    }
+    return result;
   }
 }
 

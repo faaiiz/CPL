@@ -1574,14 +1574,14 @@ class _EmbeddedHitungCPLContentState extends State<_EmbeddedHitungCPLContent>
     try {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('📊 Memuat hasil perhitungan dari database...'),
+          content: Text('📊 Menghitung hasil perhitungan OBE...'),
           duration: Duration(seconds: 2),
         ),
       );
 
-      final results = await _obeHelper.calculateAllMahasiswaCPL(
-        matakuliahId,
-        tahunAjaran,
+      final results = await _obeHelper.calculateBatchOBEResultsForMatakuliah(
+        matakuliahId: matakuliahId,
+        tahunAjaran: tahunAjaran,
       );
 
       if (!mounted) return;
@@ -1880,9 +1880,9 @@ class _EmbeddedHitungCPLContentState extends State<_EmbeddedHitungCPLContent>
 
     try {
       // Perhitungan batch untuk semua mahasiswa di matakuliah ini
-      final results = await _obeHelper.calculateAllMahasiswaCPL(
-        matakuliahId,
-        tahunAjaran,
+      final results = await _obeHelper.calculateBatchOBEResultsForMatakuliah(
+        matakuliahId: matakuliahId,
+        tahunAjaran: tahunAjaran,
       );
 
       if (!mounted) {
@@ -2863,8 +2863,8 @@ class _EmbeddedHitungCPLContentState extends State<_EmbeddedHitungCPLContent>
         final cpmkIds = <int>{};
         final cplIds = <int>{};
         for (final result in results) {
-          cpmkIds.addAll(result.cpmkValues.keys);
-          cplIds.addAll(result.cplValues.keys);
+          cpmkIds.addAll(result.cPMKValues.keys);
+          cplIds.addAll(result.cPLValues.keys);
         }
         final sortedCpmkIds = cpmkIds.toList()..sort();
         final sortedCplIds = cplIds.toList()..sort();
@@ -2966,7 +2966,7 @@ class _EmbeddedHitungCPLContentState extends State<_EmbeddedHitungCPLContent>
 
             // Add CPMK values
             for (final cpmkId in sortedCpmkIds) {
-              final value = result.cpmkValues[cpmkId];
+              final value = result.cPMKValues[cpmkId];  // ← Use legacy getter cPMKValues
               cells.add(
                 DataCell(
                   SizedBox(
@@ -2989,7 +2989,7 @@ class _EmbeddedHitungCPLContentState extends State<_EmbeddedHitungCPLContent>
 
             // Add CPL values
             for (final cplId in sortedCplIds) {
-              final value = result.cplValues[cplId];
+              final value = result.cPLValues[cplId];  // ← Use legacy getter cPLValues
               cells.add(
                 DataCell(
                   SizedBox(
@@ -3131,7 +3131,7 @@ class _EmbeddedHitungCPLContentState extends State<_EmbeddedHitungCPLContent>
               title: 'Nilai CPMK',
               icon: Icons.school,
               color: const Color(0xFF27AE60),
-              values: _calculationResult!.cpmkValues,
+              values: _calculationResult!.cPMKValues,
               labelPrefix: 'CPMK',
             ),
           if (hasCPMKData)
@@ -3143,7 +3143,7 @@ class _EmbeddedHitungCPLContentState extends State<_EmbeddedHitungCPLContent>
               title: 'Nilai CPL',
               icon: Icons.flag,
               color: const Color(0xFF8E44AD),
-              values: _calculationResult!.cplValues,
+              values: _calculationResult!.cPLValues,
               labelPrefix: 'CPL',
             ),
           

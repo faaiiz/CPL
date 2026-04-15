@@ -56,13 +56,25 @@ class _CPMKReportScreenState extends State<CPMKReportScreen> {
     });
   }
   
-  void _filterMahasiswaByAngkatan(int angkatan) async {
-    final mahasiswaList = await _dbHelper.getAllMahasiswa();
-    final filtered = mahasiswaList.where((mhs) => mhs.tahunMasuk == angkatan).toList();
-    setState(() {
-      _filteredMahasiswaList = filtered;
-      _selectedMahasiswa = null;
-    });
+  // 🎯 FIX BUG #13: Change async void to Future<void>
+  Future<void> _filterMahasiswaByAngkatan(int angkatan) async {
+    try {
+      final mahasiswaList = await _dbHelper.getAllMahasiswa();
+      final filtered = mahasiswaList.where((mhs) => mhs.tahunMasuk == angkatan).toList();
+      if (mounted) {
+        setState(() {
+          _filteredMahasiswaList = filtered;
+          _selectedMahasiswa = null;
+        });
+      }
+    } catch (e) {
+      print('❌ Error filtering mahasiswa: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e')),
+        );
+      }
+    }
   }
   
   void _onAngkatanChanged(int? angkatan) {

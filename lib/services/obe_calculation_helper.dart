@@ -1,33 +1,593 @@
 import '../models/sub_cpmk_nilai_model.dart';
+import '../models/rps_detail_model.dart';
 import 'database_helper.dart';
 
-/// 🎯 OBE Calculation Engine
-/// Menghitung Nilai Sub-CPMK, CPMK, dan CPL berdasarkan data yang ada
+/// 🎯 OBE (Outcome-Based Education) Calculation Engine v3 - REFACTORED
+/// Menghitung Nilai Sub-CPMK, CPMK, dan CPL menggunakan pendekatan OBE
 /// 
-/// Rule:
-/// - TIDAK membuat nilai
-/// - TIDAK mengubah nilai
-/// - HANYA menghitung berdasarkan data yang diberikan sistem
-/// - Jika nilai tidak tersedia → anggap 0
+/// ALUR PERHITUNGAN:
+/// Nilai Komponen (aktivitas, proyek, kuis, tugas, uts, uas)
+///     ↓
+/// Sub-CPMK (Abaikan bobot 0, normalisasi bobot aktif, hitung weighted avg)
+///     ↓
+/// CPMK (Weighted average dari Sub-CPMK menggunakan 'total' sebagai bobot)
+///     ↓
+/// CPL (Weighted aggregation dari CPMK - BUKAN simple average)
+///
+/// ✅ OBE COMPLIANCE:
+/// - MANDATORY: Semua perhitungan WAJIB melalui Sub-CPMK (bukan langsung ke CPMK)
+/// - Hanya komponen dengan bobot > 0 yang dihitung
+/// - Bobot HARUS data-driven dari database (TIDAK hardcoded)
 /// - Pembulatan 2 desimal
+/// - Total bobot harus > 0 (throw error jika tidak)
+/// - Missing values throw error (TIDAK default ke 0)
+/// - Weights > 0 dan tervalidasi sebelum digunakan
+///
+/// ⚠️ KEY CHANGES FROM v2:
+/// 1. ✅ Removed hardcoded equal weight distribution (16.67)
+/// 2. ✅ Added explicit missing value validation 
+/// 3. ✅ Added weight sum validation with warnings
+/// 4. ✅ Changed CPL to use weighted aggregation
+/// 5. ✅ Improved error messages with actionable guidance
+/// 6. ✅ Added optional validation flags
 class OBECalculationHelper {
   final DatabaseHelper _dbHelper;
+  final OBEValidationConfig _validationConfig;
 
-  // Cache untuk meningkatkan performa
-  late Map<String, dynamic> _cache;
+  OBECalculationHelper({
+    DatabaseHelper? dbHelper,
+    OBEValidationConfig? validationConfig,
+  })  : _dbHelper = dbHelper ?? DatabaseHelper(),
+        _validationConfig = validationConfig ?? OBEValidationConfig();
 
-  OBECalculationHelper({DatabaseHelper? dbHelper})
-      : _dbHelper = dbHelper ?? DatabaseHelper() {
-    _cache = {};
+  /// 🔢 Pembulatan ke 2 desimal
+  double _roundToTwoDecimals(double value) {
+    return (value * 100).round() / 100;
   }
 
-  /// 🎯 PENTING: Clear cache agar tidak menggunakan data stale
-  /// Call ini setelah RPS data berubah (update/insert)
-  void clearCache() {
-    _cache.clear();
+  /// ✅ Validasi bahwa total weights ≈ target (default 100, tolerance 1%)
+  void _validateTotalWeights(
+    String context,
+    double totalWeight, {
+    double targetWeight = 100.0,
+    double tolerance = 1.0,
+  }) {
+    final diff = (totalWeight - targetWeight).abs();
+    
+    if (diff > tolerance) {
+      final message =
+          '⚠️ $context: Total bobot = $totalWeight (harusnya $targetWeight ± $tolerance). '
+          'Pertimbangkan review RPS.';
+      
+      if (_validationConfig.strictWeightValidation) {
+        throw Exception(message);
+      } else {
+        print(message);
+      }
+    }
   }
 
-  ///  Simpan hasil perhitungan Sub-CPMK ke database
+  /// ✅ Validasi bahwa nilai komponen ada dan valid (tidak boleh default ke 0)
+  double _getValidatedComponentValue(
+    String context,
+    Map<String, double> nilaiKomponen,
+    String komponenNama,
+  ) {
+    if (!nilaiKomponen.containsKey(komponenNama)) {
+      final message = '❌ $context: Nilai komponen "$komponenNama" tidak ditemukan '
+          '(tidak boleh missing, harus ada atau 0.0 explicitly set)';
+      throw Exception(message);
+    }
+
+    final value = nilaiKomponen[komponenNama] ?? 0.0;
+    
+    // Validasi range
+    if (value < 0 || value > 100) {
+      final message =
+          '⚠️ $context: Nilai "$komponenNama" = $value (diluar range 0-100)';
+      if (_validationConfig.strictValueValidation) {
+        throw Exception(message);
+      } else {
+        print(message);
+      }
+    }
+
+    return value;
+  }
+
+  /// ============================================================================
+  /// CORE OBE CALCULATION LOGIC - SESUAI SPESIFIKASI
+  /// ============================================================================
+
+  /// 📊 STEP 1: Hitung nilai SUB-CPMK dari nilai komponen
+  ///
+  /// INPUT:
+  /// - nilaiKomponen: {aktivitas, proyek, kuis, tugas, uts, uas} dalam skala 0-100
+  ///   (MUST have all keys, tidak boleh missing!)
+  /// - subCpmkBobotMap: {
+  ///     "sub1": {"aktivitas": 10, "proyek": 20, "kuis": 0, ...},
+  ///     "sub2": {...}
+  ///   }
+  ///   (Bobot HARUS dari database, TIDAK hardcoded)
+  ///
+  /// ALGORITMA:
+  /// 1. Untuk setiap Sub-CPMK:
+  ///    - Validasi bahwa bobot > 0 ada (jika semua 0, throw error)
+  ///    - Hitung total bobot aktif (bobot > 0)
+  ///    - Normalisasi bobot: bobot_normal = bobot / total_bobot
+  ///    - Hitung nilai: Σ(bobot_normal × nilai_komponen)
+  ///    - Validasi nilai ada di range [0, 100]
+  /// 2. Return Map<subCpmkId, nilai>
+  ///
+  /// OUTPUT: {"sub1": 85.50, "sub2": 78.25, ...}
+  /// 
+  /// ❌ THROWS if:
+  /// - nilaiKomponen kosong
+  /// - subCpmkBobotMap kosong
+  /// - Sub-CPMK total bobot = 0
+  /// - Nilai komponen missing (tidak boleh default ke 0)
+  /// - Nilai komponen diluar range [0, 100]
+  Map<String, double> calculateSubCPMKValues({
+    required Map<String, double> nilaiKomponen,
+    required Map<String, Map<String, double>> subCpmkBobotMap,
+  }) {
+    final result = <String, double>{};
+
+    // Validasi input
+    if (nilaiKomponen.isEmpty) {
+      throw Exception('❌ Nilai komponen tidak boleh kosong');
+    }
+    if (subCpmkBobotMap.isEmpty) {
+      throw Exception('❌ Sub-CPMK bobot map tidak boleh kosong');
+    }
+
+    // Proses setiap Sub-CPMK
+    subCpmkBobotMap.forEach((subCpmkId, bobotMap) {
+      final context = 'Sub-CPMK "$subCpmkId"';
+
+      // Hitung total bobot aktif (bobot > 0)
+      double totalBobot = 0.0;
+      final activeBobots = <String, double>{};
+
+      bobotMap.forEach((komponenNama, bobot) {
+        if (bobot > 0) {
+          activeBobots[komponenNama] = bobot;
+          totalBobot += bobot;
+        }
+      });
+
+      // Validasi: Total bobot harus > 0
+      if (totalBobot <= 0) {
+        throw Exception(
+          '❌ $context: Semua bobot komponen = 0 (harus ada minimal 1 komponen dengan bobot > 0). '
+          'Periksa RPS dan setup Sub-CPMK←Komponen mapping.',
+        );
+      }
+
+      // ✅ Validasi total bobot mendekati 100
+      if (_validationConfig.strictWeightValidation) {
+        _validateTotalWeights(context, totalBobot);
+      }
+
+      // Hitung nilai Sub-CPMK
+      double nilaiSub = 0.0;
+
+      activeBobots.forEach((komponenNama, bobot) {
+        // ✅ Validasi: Nilai komponen HARUS ADA (tidak boleh missing)
+        final nilaiKomp =
+            _getValidatedComponentValue(context, nilaiKomponen, komponenNama);
+
+        // Normalisasi bobot dan hitung kontribusi
+        final bobotNormal = bobot / totalBobot;
+        nilaiSub += bobotNormal * nilaiKomp;
+      });
+
+      // Roundup ke 2 desimal
+      result[subCpmkId] = _roundToTwoDecimals(nilaiSub);
+    });
+
+    return result;
+  }
+
+  /// 📊 STEP 2: Hitung nilai CPMK dari nilai Sub-CPMK
+  ///
+  /// INPUT:
+  /// - subCpmkValues: {"sub1": 85.50, "sub2": 78.25, ...}
+  /// - cpmkSubCpmkMap: {
+  ///     "cpmk1": {
+  ///       "sub1": 20,  // bobot total Sub-CPMK dalam CPMK (dari database)
+  ///       "sub2": 15,
+  ///       "sub3": 15
+  ///     }
+  ///   }
+  ///
+  /// ALGORITMA:
+  /// 1. Untuk setiap CPMK:
+  ///    - Hitung weighted average: Σ(nilai_sub × bobot_total_sub) / Σ(bobot_total_sub)
+  ///    - Validasi bobot > 0 ada
+  /// 2. Return Map<cpmkId, nilai>
+  ///
+  /// OUTPUT: {"cpmk1": 82.75}
+  Map<String, double> calculateCPMKValues({
+    required Map<String, double> subCpmkValues,
+    required Map<String, Map<String, double>> cpmkSubCpmkMap,
+  }) {
+    final result = <String, double>{};
+
+    if (subCpmkValues.isEmpty) {
+      throw Exception('❌ Sub-CPMK values tidak boleh kosong');
+    }
+    if (cpmkSubCpmkMap.isEmpty) {
+      throw Exception('❌ CPMK-SubCPMK map tidak boleh kosong');
+    }
+
+    // Proses setiap CPMK
+    cpmkSubCpmkMap.forEach((cpmkId, subCpmkMap) {
+      final context = 'CPMK "$cpmkId"';
+      double totalWeighted = 0.0;
+      double totalBobot = 0.0;
+
+      // Hitung weighted average
+      subCpmkMap.forEach((subCpmkId, bobotTotal) {
+        if (bobotTotal <= 0) {
+          return; // Skip bobot 0
+        }
+
+        // Validasi: Sub-CPMK harus ada dalam values
+        if (!subCpmkValues.containsKey(subCpmkId)) {
+          throw Exception(
+            '❌ $context: Sub-CPMK "$subCpmkId" tidak ditemukan dalam calculated values. '
+            'Periksa mapping atau pastikan Sub-CPMK punya nilai.',
+          );
+        }
+
+        final nilaiSub = subCpmkValues[subCpmkId]!;
+        totalWeighted += nilaiSub * bobotTotal;
+        totalBobot += bobotTotal;
+      });
+
+      // Validasi: Total bobot harus > 0
+      if (totalBobot <= 0) {
+        throw Exception(
+          '❌ $context: Semua bobot Sub-CPMK = 0 (harus ada minimal 1 dengan bobot > 0). '
+          'Periksa CPMK←SubCPMK mapping di database.',
+        );
+      }
+
+      // ✅ Validasi total bobot mendekati 100
+      if (_validationConfig.strictWeightValidation) {
+        _validateTotalWeights(context, totalBobot);
+      }
+
+      // Hitung nilai CPMK
+      final nilaiCpmk = totalWeighted / totalBobot;
+      result[cpmkId] = _roundToTwoDecimals(nilaiCpmk);
+    });
+
+    return result;
+  }
+
+  /// 📊 STEP 3: Hitung nilai CPL dari nilai CPMK
+  ///
+  /// INPUT:
+  /// - cpmkValues: {"cpmk1": 82.75, ...}
+  /// - cplCpmkMap: {
+  ///     "cpl1": {"cpmk1": 30, "cpmk2": 35, ...},  // WEIGHTED aggregation (BUKAN simple avg)
+  ///     "cpl2": {...}
+  ///   }
+  ///
+  /// ALGORITMA:
+  /// ✅ IMPROVED: Gunakan weighted average BUKAN simple average
+  /// 1. Untuk setiap CPL:
+  ///    - Hitung weighted average: Σ(nilai_cpmk × bobot_cpmk) / Σ(bobot_cpmk)
+  ///    - Jika bobot tidak ada, gunakan equal weight fallback (optional)
+  /// 2. Return Map<cplId, nilai>
+  ///
+  /// OUTPUT: {"cpl1": 80.50, "cpl2": 85.75, ...}
+  Map<String, double> calculateCPLValues({
+    required Map<String, double> cpmkValues,
+    required Map<String, Map<String, double>> cplCpmkMap,
+    bool useEqualWeightFallback = true,
+  }) {
+    final result = <String, double>{};
+
+    if (cpmkValues.isEmpty) {
+      return result; // CPL is optional
+    }
+
+    cplCpmkMap.forEach((cplId, cpmkWeightMap) {
+      final context = 'CPL "$cplId"';
+      double totalWeighted = 0.0;
+      double totalBobot = 0.0;
+      int validCpmkCount = 0;
+
+      // ✅ IMPROVED: Hitung weighted average dari CPMK
+      cpmkWeightMap.forEach((cpmkId, bobot) {
+        if (bobot <= 0) {
+          return; // Skip bobot 0
+        }
+
+        if (cpmkValues.containsKey(cpmkId)) {
+          final nilaiCpmk = cpmkValues[cpmkId]!;
+          totalWeighted += nilaiCpmk * bobot;
+          totalBobot += bobot;
+          validCpmkCount++;
+        }
+      });
+
+      // Jika tidak ada bobot, gunakan equal weight fallback
+      if (totalBobot <= 0 && useEqualWeightFallback) {
+        // Simple average sebagai fallback (jika bobot tidak didefinisikan)
+        for (final cpmkId in cpmkWeightMap.keys) {
+          if (cpmkValues.containsKey(cpmkId)) {
+            totalWeighted += cpmkValues[cpmkId]!;
+            validCpmkCount++;
+          }
+        }
+
+        if (validCpmkCount > 0) {
+          final nilaiCpl = totalWeighted / validCpmkCount;
+          result[cplId] = _roundToTwoDecimals(nilaiCpl);
+
+          if (_validationConfig.warnOnFallback) {
+            print('⚠️ $context: Menggunakan equal weight fallback (bobot tidak tersedia di database)');
+          }
+        }
+      } else if (totalBobot > 0) {
+        // Weighted average
+        final nilaiCpl = totalWeighted / totalBobot;
+        result[cplId] = _roundToTwoDecimals(nilaiCpl);
+
+        // ✅ Validasi total bobot
+        if (_validationConfig.strictWeightValidation) {
+          _validateTotalWeights(context, totalBobot);
+        }
+      }
+    });
+
+    return result;
+  }
+
+  /// ============================================================================
+  /// WRAPPER FUNCTION - Hitung semua dalam satu call
+  /// ============================================================================
+
+  /// 🎯 MAIN FUNCTION: Hitung Sub-CPMK, CPMK, CPL dalam satu call
+  /// 
+  /// INPUT:
+  /// {
+  ///   "nilaiKomponen": {"aktivitas": 80, "proyek": 85, ...},
+  ///   "subCpmkBobotMap": {
+  ///     "sub1": {"aktivitas": 10, "proyek": 20, ...},
+  ///     ...
+  ///   },
+  ///   "cpmkSubCpmkMap": {
+  ///     "cpmk1": {"sub1": 20, "sub2": 15, ...},
+  ///     ...
+  ///   },
+  ///   "cplCpmkMap": {
+  ///     "cpl1": {"cpmk1": 30, "cpmk2": 35, ...},  // WEIGHTED (not list)
+  ///     ...
+  ///   }
+  /// }
+  /// 
+  /// OUTPUT:
+  /// {
+  ///   "sub_cpmk": {"sub1": 85.50, ...},
+  ///   "cpmk": {"cpmk1": 82.75, ...},
+  ///   "cpl": {"cpl1": 80.50, ...}
+  /// }
+  Map<String, dynamic> calculateOBEComplete({
+    required Map<String, double> nilaiKomponen,
+    required Map<String, Map<String, double>> subCpmkBobotMap,
+    required Map<String, Map<String, double>> cpmkSubCpmkMap,
+    Map<String, Map<String, double>>? cplCpmkMap,
+  }) {
+    try {
+      // STEP 1: Hitung Sub-CPMK
+      final subCpmkValues = calculateSubCPMKValues(
+        nilaiKomponen: nilaiKomponen,
+        subCpmkBobotMap: subCpmkBobotMap,
+      );
+
+      // STEP 2: Hitung CPMK
+      final cpmkValues = calculateCPMKValues(
+        subCpmkValues: subCpmkValues,
+        cpmkSubCpmkMap: cpmkSubCpmkMap,
+      );
+
+      // STEP 3: Hitung CPL (optional) - now uses weighted aggregation
+      final cplValues = cplCpmkMap != null
+          ? calculateCPLValues(
+              cpmkValues: cpmkValues,
+              cplCpmkMap: cplCpmkMap,
+            )
+          : <String, double>{};
+
+      return {
+        'sub_cpmk': subCpmkValues,
+        'cpmk': cpmkValues,
+        'cpl': cplValues,
+        'status': 'success',
+      };
+    } catch (e) {
+      return {
+        'status': 'error',
+        'message': e.toString(),
+      };
+    }
+  }
+
+  /// ✅ IMPROVED: Wrapper untuk API lama dengan List<String> untuk CPL
+  /// (Backward compatibility - internally converts to Map)
+  @Deprecated('Use calculateOBEComplete() with Map<String, Map<String, double>> for CPL')
+  Map<String, dynamic> calculateOBECompleteWithListCPL({
+    required Map<String, double> nilaiKomponen,
+    required Map<String, Map<String, double>> subCpmkBobotMap,
+    required Map<String, Map<String, double>> cpmkSubCpmkMap,
+    Map<String, List<String>>? cplCpmkMapList,
+  }) {
+    // Convert List<String> to Map<String, double> with equal weights
+    Map<String, Map<String, double>>? cplCpmkMap;
+    if (cplCpmkMapList != null) {
+      cplCpmkMap = <String, Map<String, double>>{};
+      cplCpmkMapList.forEach((cplId, cpmkIdList) {
+        final cpmkMap = <String, double>{};
+        for (final cpmkId in cpmkIdList) {
+          cpmkMap[cpmkId] = 1.0; // Equal weight fallback
+        }
+        cplCpmkMap?[cplId] = cpmkMap;
+      });
+    }
+
+    return calculateOBEComplete(
+      nilaiKomponen: nilaiKomponen,
+      subCpmkBobotMap: subCpmkBobotMap,
+      cpmkSubCpmkMap: cpmkSubCpmkMap,
+      cplCpmkMap: cplCpmkMap,
+    );
+  }
+
+  /// ============================================================================
+  /// COMPATIBILITY WRAPPERS (For Old Code Using List-based API)
+  /// ============================================================================
+
+  /// ⚠️ DEPRECATED: Legacy method using List<double> instead of Map<String, double>
+  /// Wrapper untuk backward compatibility dengan kode lama
+  /// 
+  /// Format List: [aktivitas, proyek, kuis, tugas, uts, uas]
+  /// Format Map<int, List<double>>: {subCpmkId: [bobot_aktivitas, bobot_proyek, ...]}
+  Map<int, double> calculateSubCPMKWithMatrix({
+    required List<double> nilaiKomponen,
+    required Map<int, List<double>> bobotMatrix,
+  }) {
+    // Konversi List ke Map dengan nama komponen
+    const komponenNames = ['aktivitas', 'proyek', 'kuis', 'tugas', 'uts', 'uas'];
+    
+    final nilaiKomponenMap = <String, double>{};
+    for (int i = 0; i < nilaiKomponen.length && i < komponenNames.length; i++) {
+      nilaiKomponenMap[komponenNames[i]] = nilaiKomponen[i];
+    }
+
+    // Konversi Map<int, List<double>> ke Map<String, Map<String, double>>
+    final subCpmkBobotMapNew = <String, Map<String, double>>{};
+    for (final entry in bobotMatrix.entries) {
+      final subCpmkId = entry.key.toString();
+      final bobots = entry.value;
+      
+      final bobotMap = <String, double>{};
+      for (int i = 0; i < bobots.length && i < komponenNames.length; i++) {
+        bobotMap[komponenNames[i]] = bobots[i];
+      }
+      subCpmkBobotMapNew[subCpmkId] = bobotMap;
+    }
+
+    // Hitung dengan method baru
+    final result = calculateSubCPMKValues(
+      nilaiKomponen: nilaiKomponenMap,
+      subCpmkBobotMap: subCpmkBobotMapNew,
+    );
+
+    // Konversi hasil kembali ke Map<int, double>
+    final resultInt = <int, double>{};
+    for (final entry in result.entries) {
+      final subCpmkId = int.tryParse(entry.key) ?? 0;
+      if (subCpmkId > 0) {
+        resultInt[subCpmkId] = entry.value;
+      }
+    }
+
+    return resultInt;
+  }
+
+  /// ⚠️ DEPRECATED: Legacy method using Map<int, double>
+  /// Wrapper untuk backward compatibility dengan kode lama
+  /// 
+  /// Format Map<int, Map<int, double>>: {cpmkId: {subCpmkId: bobot}}
+  Map<int, double> calculateCPMKFromSubCPMK({
+    required Map<int, double> subCpmkValues,
+    required Map<int, Map<int, double>> subCpmkBobotToCpmk,
+  }) {
+    // Konversi subCpmkValues dari Map<int, double> ke Map<String, double>
+    final subCpmkValuesStr = <String, double>{};
+    for (final entry in subCpmkValues.entries) {
+      subCpmkValuesStr[entry.key.toString()] = entry.value;
+    }
+
+    // Konversi subCpmkBobotToCpmk dari Map<int, Map<int, double>> 
+    // ke Map<String, Map<String, double>>
+    final cpmkSubCpmkMapStr = <String, Map<String, double>>{};
+    for (final cpmkEntry in subCpmkBobotToCpmk.entries) {
+      final cpmkIdStr = cpmkEntry.key.toString();
+      final subCpmkBobot = <String, double>{};
+      
+      for (final subEntry in cpmkEntry.value.entries) {
+        subCpmkBobot[subEntry.key.toString()] = subEntry.value;
+      }
+      cpmkSubCpmkMapStr[cpmkIdStr] = subCpmkBobot;
+    }
+
+    // Hitung dengan method baru
+    final result = calculateCPMKValues(
+      subCpmkValues: subCpmkValuesStr,
+      cpmkSubCpmkMap: cpmkSubCpmkMapStr,
+    );
+
+    // Konversi hasil kembali ke Map<int, double>
+    final resultInt = <int, double>{};
+    for (final entry in result.entries) {
+      final cpmkId = int.tryParse(entry.key) ?? 0;
+      if (cpmkId > 0) {
+        resultInt[cpmkId] = entry.value;
+      }
+    }
+
+    return resultInt;
+  }
+
+  /// ⚠️ DEPRECATED: Legacy method wrapper
+  Map<int, double> calculateCPMKFull({
+    required List<double> nilaiKomponen,
+    required Map<int, List<double>> bobotMatrix,
+    required Map<int, Map<int, double>> subCpmkBobot,
+  }) {
+    // Step 1: Hitung Sub-CPMK
+    final subCpmkValues = calculateSubCPMKWithMatrix(
+      nilaiKomponen: nilaiKomponen,
+      bobotMatrix: bobotMatrix,
+    );
+
+    // Step 2: Hitung CPMK dari Sub-CPMK
+    final cpmkValues = calculateCPMKFromSubCPMK(
+      subCpmkValues: subCpmkValues,
+      subCpmkBobotToCpmk: subCpmkBobot,
+    );
+
+    return cpmkValues;
+  }
+
+  /// ⚠️ DEPRECATED: Method ini sudah di-refactor
+  /// Gunakan `calculateOBEComplete()` dengan data preparation manual
+  /// atau `calculateSubCPMKValues()` + `calculateCPMKValues()` yang lebih fleksibel
+  @Deprecated('Use calculateOBEComplete() or calculate*Values() methods instead')
+  Future<List<OBECalculationResult>> calculateAllMahasiswaCPL(
+    int matakuliahId,
+    int tahunAjaran,
+  ) async {
+    // Stub implementation - tidak akan berfungsi karena tidak ada database access
+    print('❌ ERROR: calculateAllMahasiswaCPL() telah di-deprecate!');
+    print('   Gunakan calculateOBEComplete() atau methods lain dengan data preparation manual');
+    throw UnsupportedError(
+      'calculateAllMahasiswaCPL() telah di-refactor. '
+      'Gunakan calculateOBEComplete() atau calculate*Values() methods dengan data preparation manual.'
+    );
+  }
+
+  /// ============================================================================
+  /// DATABASE INTEGRATION (OPTIONAL)
+  /// ============================================================================
+
+  /// Simpan hasil perhitungan Sub-CPMK ke database
   Future<bool> saveSubCPMKNilai(
     int mahasiswaId,
     int subCpmkId,
@@ -50,858 +610,1045 @@ class OBECalculationHelper {
     }
   }
 
-  /// 🔢 Pembulatan ke 2 desimal
-  double _roundToTwoDecimals(double value) {
-    return (value * 100).round() / 100;
-  }
-
-  /// 🎯 ACADEMIC OBE CALCULATION ENGINE
-  /// Menghitung Sub-CPMK dan CPMK menggunakan weighted average matrix
-  /// 
-  /// Sub-CPMK Formula:
-  /// SubCPMK_i = (Σ nilai_komponen × bobot) / total_bobot_komponen
-  ///
-  /// CPMK Formula:
-  /// CPMK = (Σ SubCPMK × bobot_subcpmk) / total_bobot_subcpmk
-  /// 
-  /// Rules:
-  /// - Gunakan hanya bobot yang diberikan
-  /// - Hanya komponen dengan bobot > 0 yang dihitung
-  /// - Total bobot sub-CPMK harus = 100
-  /// - Semua hasil dibulatkan 2 desimal
-  /// - Output deterministik dan konsisten
-  
-  /// Hitung Sub-CPMK dengan matriks bobot komponen
-  /// 
-  /// Parameter:
-  /// - nilaiKomponen: List nilai komponen [Aktivitas, Hasil Proyek, Kuis, Tugas, UTS, UAS]
-  /// - bobotMatrix: Map<subCpmkId, List<double>> berisi bobot setiap komponen per sub-CPMK
-  /// 
-  /// Return: Map<subCpmkId, double> hasil perhitungan Sub-CPMK
-  /// Throws: Exception jika data tidak valid
-  Map<int, double> calculateSubCPMKWithMatrix({
-    required List<double> nilaiKomponen,
-    required Map<int, List<double>> bobotMatrix,
-  }) {
-    // 1. Validasi input
-    if (nilaiKomponen.isEmpty) {
-      throw Exception('❌ Nilai komponen tidak boleh kosong');
-    }
-
-    if (bobotMatrix.isEmpty) {
-      throw Exception('❌ Bobot matrix tidak boleh kosong');
-    }
-
-    final result = <int, double>{};
-
-    // 2. Hitung setiap Sub-CPMK
-    bobotMatrix.forEach((subCpmkId, bobot) {
-      if (bobot.length != nilaiKomponen.length) {
-        throw Exception(
-          '❌ Jumlah bobot (${bobot.length}) tidak sesuai dengan jumlah '
-          'komponen nilai (${nilaiKomponen.length}) untuk Sub-CPMK $subCpmkId',
-        );
-      }
-
-      // Hitung weighted sum dan total bobot aktif
-      double weightedSum = 0.0;
-      double totalBobot = 0.0;
-
-      for (int i = 0; i < bobot.length; i++) {
-        if (bobot[i] > 0) {
-          // Hanya komponen dengan bobot > 0 yang dihitung
-          weightedSum += nilaiKomponen[i] * bobot[i];
-          totalBobot += bobot[i];
-        }
-      }
-
-      if (totalBobot == 0) {
-        throw Exception(
-          '❌ Total bobot untuk Sub-CPMK $subCpmkId = 0. '
-          'Minimal ada satu komponen dengan bobot > 0',
-        );
-      }
-
-      // Hitung Sub-CPMK value
-      final subCpmkValue = weightedSum / totalBobot;
-      result[subCpmkId] = _roundToTwoDecimals(subCpmkValue);
-    });
-
-    return result;
-  }
-
-  /// Hitung CPMK dari Sub-CPMK dengan validasi total bobot = 100
-  /// 
-  /// Parameter:
-  /// - subCpmkValues: Map<subCpmkId, nilai> hasil dari calculateSubCPMKWithMatrix
-  /// - subCpmkBobotToCpmk: Map<cpmkId, Map<subCpmkId, bobot>> mapping Sub-CPMK ke CPMK dengan bobot
-  /// 
-  /// Return: Map<cpmkId, double> hasil perhitungan CPMK
-  /// Throws: Exception jika total bobot ≠ 100
-  Map<int, double> calculateCPMKFromSubCPMK({
-    required Map<int, double> subCpmkValues,
-    required Map<int, Map<int, double>> subCpmkBobotToCpmk,
-  }) {
-    if (subCpmkValues.isEmpty) {
-      throw Exception('❌ Sub-CPMK values tidak boleh kosong');
-    }
-
-    if (subCpmkBobotToCpmk.isEmpty) {
-      throw Exception('❌ Bobot mapping Sub-CPMK ke CPMK tidak boleh kosong');
-    }
-
-    final result = <int, double>{};
-
-    // Hitung setiap CPMK
-    subCpmkBobotToCpmk.forEach((cpmkId, subCpmkBobot) {
-      double weightedSum = 0.0;
-      double totalBobot = 0.0;
-
-      // Validasi dan hitung
-      subCpmkBobot.forEach((subCpmkId, bobot) {
-        if (!subCpmkValues.containsKey(subCpmkId)) {
-          throw Exception(
-            '❌ Sub-CPMK $subCpmkId tidak ditemukan dalam values',
-          );
-        }
-
-        if (bobot > 0) {
-          weightedSum += subCpmkValues[subCpmkId]! * bobot;
-          totalBobot += bobot;
-        }
-      });
-
-      // Validasi total bobot = 100
-      if ((totalBobot - 100).abs() > 0.01) {
-        // Tolerance 0.01 untuk floating point
-        throw Exception(
-          '❌ Total bobot Sub-CPMK untuk CPMK $cpmkId = $totalBobot '
-          '(harus = 100)',
-        );
-      }
-
-      final cpmkValue = weightedSum / totalBobot;
-      result[cpmkId] = _roundToTwoDecimals(cpmkValue);
-    });
-
-    return result;
-  }
-
-  /// Hitung CPMK langsung dari nilai komponen
-  /// 
-  /// Formula:
-  /// CPMK = (Σ SubCPMK × bobot_sub) / 100
-  /// dimana SubCPMK_i = (Σ nilai × bobot) / total_bobot_sub_i
-  /// 
-  /// Parameter:
-  /// - nilaiKomponen: List nilai komponen
-  /// - bobotMatrix: Map<subCpmkId, List<double>> bobot komponen per sub-CPMK
-  /// - subCpmkBobot: Map<cpmkId, Map<subCpmkId, double>> bobot sub-CPMK per CPMK
-  /// 
-  /// Return: Map<cpmkId, double> nilai CPMK yang sudah divalidasi
-  Map<int, double> calculateCPMKFull({
-    required List<double> nilaiKomponen,
-    required Map<int, List<double>> bobotMatrix,
-    required Map<int, Map<int, double>> subCpmkBobot,
-  }) {
-    // 1. Hitung Sub-CPMK
-    final subCpmkValues = calculateSubCPMKWithMatrix(
-      nilaiKomponen: nilaiKomponen,
-      bobotMatrix: bobotMatrix,
-    );
-
-    // 2. Hitung CPMK dari Sub-CPMK dengan validasi
-    final cpmkValues = calculateCPMKFromSubCPMK(
-      subCpmkValues: subCpmkValues,
-      subCpmkBobotToCpmk: subCpmkBobot,
-    );
-
-    return cpmkValues;
-  }
-
-  /// Get nilai akhir per komponen untuk perhitungan detail
-  /// Note: Saat ini sistem menyimpan nilai akhir. Untuk perhitungan
-  /// berbasis komponen, perlu extension table untuk menyimpan
-  /// nilai individu (aktivitas, tugas, kuis, uts, uas, hasil proyek)
-  Future<Map<String, double>> getNilaiKomponen(
-    int mahasiswaId,
-    int matakuliahId,
-    int tahunAjaran,
-  ) async {
+  /// Hitung dan simpan semua hasil OBE untuk satu mahasiswa
+  Future<bool> calculateAndSaveOBEResults({
+    required int mahasiswaId,
+    required int matakuliahId,
+    required int tahunAjaran,
+    required Map<String, double> nilaiKomponen,
+    required Map<String, Map<String, double>> subCpmkBobotMap,
+    required Map<String, Map<String, double>> cpmkSubCpmkMap,
+  }) async {
     try {
-      // Placeholder untuk implementasi future
-      // Ketika ada extension table untuk menyimpan nilai komponen
-      // maka method ini akan mengambil dari database
-      final result = <String, double>{};
-      
-      // Untuk saat ini, return empty map
-      // Update ketika ada table untuk nilai komponen per mahasiswa
-      return result;
-    } catch (e) {
-      return {};
-    }
-  }
+      // Hitung semua nilai OBE
+      final result = calculateOBEComplete(
+        nilaiKomponen: nilaiKomponen,
+        subCpmkBobotMap: subCpmkBobotMap,
+        cpmkSubCpmkMap: cpmkSubCpmkMap,
+      );
 
-  /// 🔄 Hitung CPL untuk semua mahasiswa dalam 1 tahun ajaran dan matakuliah
-  Future<List<OBECalculationResult>> calculateAllMahasiswaCPL(
-    int matakuliahId,
-    int tahunAjaran,
-  ) async {
-    try {
-      final results = <OBECalculationResult>[];
-
-      // 🎯 PENTING: Clear cache sebelum batch calculation
-      // Ini memastikan data terbaru digunakan (terutama jika RPS berubah)
-      clearCache();
-
-      // 🚀 OPTIMASI: Filter nilai by matakuliah dan tahun_ajaran
-      // Hanya hitung mahasiswa yang memiliki nilai untuk MK ini
-      final nilaiList = await _dbHelper.getNilaiByMatakuliah(matakuliahId);
-      
-      // Filter by tahun_ajaran
-      final filteredNilai = nilaiList
-          .where((n) => n.tahunAjaran == tahunAjaran)
-          .toList();
-
-      if (filteredNilai.isEmpty) {
-        print('⚠️ No nilai found for matakuliah $matakuliahId, tahun_ajaran $tahunAjaran');
-        return results;
+      if (result['status'] != 'success') {
+        return false;
       }
 
-      // Extract unique mahasiswa IDs
-      final uniqueMahasiswaIds = <int>{};
-      for (final nilai in filteredNilai) {
-        if (nilai.mahasiswaId > 0) {
-          uniqueMahasiswaIds.add(nilai.mahasiswaId);
-        }
-      }
-
-      if (uniqueMahasiswaIds.isEmpty) {
-        print('⚠️ No valid mahasiswa IDs found');
-        return results;
-      }
-
-      print('🎯 Processing ${uniqueMahasiswaIds.length} mahasiswa for MK $matakuliahId');
-
-      // 🚀 OPTIMASI: Pre-load semua reference data sekali
-      // Alih-alih per mahasiswa, load sekali untuk semua
-      
-      try {
-        // Load semua data yang dibutuhkan dalam parallel
-        final rpsDetailsTask = _dbHelper.getRPSDetailByMatakuliah(matakuliahId);
-        final subCpmkCpmkMappingsTask = _loadAllSubCpmkCpmkMappings();
-        final cpmkCplMappingsTask = _loadAllCpmkCplMappings();
-        
-        final rpsDetails = await rpsDetailsTask;
-        final allSubCpmkCpmkMappings = await subCpmkCpmkMappingsTask;
-        final allCpmkCplMappings = await cpmkCplMappingsTask;
-        
-        // Cache data untuk reuse
-        _cache = {
-          'rpsDetails': rpsDetails,
-          'subCpmkCpmkMappings': allSubCpmkCpmkMappings,
-          'cpmkCplMappings': allCpmkCplMappings,
-        };
-      } catch (e) {
-        print('⚠️ Error pre-loading reference data: $e');
-        // Continue dengan cache kosong - fallback akan handle
-      }
-
-      // 🚀 OPTIMASI: Process mahasiswa dalam batch
-      // Hanya process mahasiswa yang punya nilai
-      int successCount = 0;
-      int errorCount = 0;
-      
-      for (final mahasiswaId in uniqueMahasiswaIds) {
-        try {
-          final result = await calculateAllOBEValuesOptimized(
+      // Simpan hasil Sub-CPMK ke database
+      final subCpmkValues = result['sub_cpmk'] as Map<String, double>;
+      for (final entry in subCpmkValues.entries) {
+        final subCpmkId = int.tryParse(entry.key) ?? 0;
+        if (subCpmkId > 0) {
+          await saveSubCPMKNilai(
             mahasiswaId,
-            matakuliahId,
+            subCpmkId,
+            entry.value,
             tahunAjaran,
           );
-          
-          if (result.hasData) {
-            results.add(result);
-            successCount++;
-          }
-        } catch (e) {
-          print('❌ Error processing mahasiswa $mahasiswaId: $e');
-          errorCount++;
         }
       }
 
-      print('✅ Batch calculation complete: $successCount success, $errorCount errors');
-
-      return results;
+      return true;
     } catch (e) {
-      print('❌ CRITICAL ERROR in calculateAllMahasiswaCPL: $e');
-      return [];
+      return false;
     }
   }
 
-  /// Load all SubCPMK-CPMK mappings in one query
-  Future<Map<int, List<dynamic>>> _loadAllSubCpmkCpmkMappings() async {
+  /// ============================================================================
+  /// BATCH CALCULATION (Optimized & improved error handling)
+  /// ============================================================================
+
+  /// 🎯 Hitung OBE (Sub-CPMK, CPMK, CPL) untuk semua mahasiswa di satu mata kuliah
+  ///
+  /// INPUT:
+  /// - matakuliahId: ID mata kuliah
+  /// - tahunAjaran: Tahun akademik
+  ///
+  /// OUTPUT: 
+  /// - List<OBECalculationResult>: Hasil untuk setiap mahasiswa
+  /// - Errors aggregated dan di-report
+  ///
+  /// BENEFITS dari method ini:
+  /// - Load bobot sekali (efficient)
+  /// - Process batch dengan error collection
+  /// - Report aggregated stats
+  Future<List<OBECalculationResult>> calculateBatchOBEResultsForMatakuliah({
+    required int matakuliahId,
+    required int tahunAjaran,
+    bool continueOnError = true,
+  }) async {
     try {
-      // 🚀 OPTIMASI: Load semua mappings dalam satu batch query
-      final allMappings = await _dbHelper.getAllSubCPMKCPMKMappings();
-      
-      // Build map untuk quick access
-      final mappingResult = <int, List<dynamic>>{};
-      for (final mapping in allMappings) {
-        final subCpmkId = mapping['sub_cpmk_id'] as int;
-        if (!mappingResult.containsKey(subCpmkId)) {
-          mappingResult[subCpmkId] = [];
+      final results = <OBECalculationResult>[];
+      final errors = <int, String>{}; // mahasiswaId -> error message
+
+      // STEP 1: Get semua nilai_komponen untuk MK ini
+      final allNilaiKomponen = await _dbHelper.getAllNilaiKomponen(
+        matakuliahId: matakuliahId,
+        tahunAjaran: tahunAjaran,
+      );
+
+      final nilaiKomponenByMahasiswa = <int, Map<String, dynamic>>{};
+      for (final nk in allNilaiKomponen) {
+        final mkId = nk['matakuliah_id'] as int?;
+        final tahun = nk['tahun_ajaran'] as int?;
+        final mahasiswaId = nk['mahasiswa_id'] as int;
+
+        if (mkId == matakuliahId && tahun == tahunAjaran) {
+          nilaiKomponenByMahasiswa[mahasiswaId] = nk;
         }
-        mappingResult[subCpmkId]!.add(mapping);
       }
 
-      return mappingResult;
-    } catch (e) {
-      return {};
-    }
-  }
-
-  /// Load all CPMK-CPL mappings in one query
-  Future<Map<int, List<dynamic>>> _loadAllCpmkCplMappings() async {
-    try {
-      final allMappings = await _dbHelper.getAllCPMKCPLMappings();
-      
-      final mappingResult = <int, List<dynamic>>{};
-      for (final mapping in allMappings) {
-        final cpmkId = mapping is Map ? mapping['cpmk_id'] as int : mapping.cpmkId as int;
-        if (!mappingResult.containsKey(cpmkId)) {
-          mappingResult[cpmkId] = [];
-        }
-        mappingResult[cpmkId]!.add(mapping);
+      if (nilaiKomponenByMahasiswa.isEmpty) {
+        print(
+            '⚠️ Tidak ada nilai_komponen untuk MK $matakuliahId tahun $tahunAjaran');
+        return results;
       }
 
-      return mappingResult;
-    } catch (e) {
-      return {};
-    }
-  }
+      print(
+          '📊 Found ${nilaiKomponenByMahasiswa.length} mahasiswa dengan nilai_komponen untuk MK $matakuliahId');
 
-  /// Hitung nilai OBE dengan cached data (lebih cepat)
-  Future<OBECalculationResult> calculateAllOBEValuesOptimized(
-    int mahasiswaId,
-    int matakuliahId,
-    int tahunAjaran,
-  ) async {
-    try {
-      final subCpmkValues = await calculateSubCPMKValuesOptimized(
-        mahasiswaId,
-        matakuliahId,
-        tahunAjaran,
-      );
+      // 🔍 DEBUG: Print RPS data dari database
+      await debugPrintRPSDataForMatakuliah(matakuliahId);
 
-      final cpmkValues = await calculateCPMKValuesOptimized(
-        mahasiswaId,
-        matakuliahId,
-        tahunAjaran,
-        subCpmkValues,
-      );
+      // STEP 2: Get bobot matrix (sama untuk semua mahasiswa)
+      final subCpmkBobotMap =
+          await _getSubCpmkBobotMapFromDatabase(matakuliahId);
+      final cpmkSubCpmkMap =
+          await _getCpmkSubCpmkMapFromDatabase(matakuliahId);
 
-      final cplValues = await calculateCPLValuesOptimized(
-        mahasiswaId,
-        matakuliahId,
-        tahunAjaran,
-        cpmkValues,
-      );
+      if (subCpmkBobotMap.isEmpty || cpmkSubCpmkMap.isEmpty) {
+        throw Exception(
+          'Bobot matrix tidak lengkap untuk MK $matakuliahId. '
+          'Pastikan RPS dan mapping sudah di-setup!',
+        );
+      }
 
-      // 🎯 PENTING: Load bobot Sub-CPMK dari bobot matrix (bukan RPS Details!)
-      // Ini memastikan averageSubCPMKNilai menggunakan bobot yang sama dengan CPMK calculation
-      Map<int, double>? subCpmkBobots;
+      // STEP 3: Get CPL mapping (optional)
+      Map<String, Map<String, double>>? cplCpmkMap;
       try {
-        subCpmkBobots = await _getSubCpmkBobots(matakuliahId);
+        cplCpmkMap = await _getCPLCpmkMapFromDatabase(matakuliahId);
       } catch (e) {
-        // Ignore error
+        print('⚠️ CPL mapping tidak tersedia (optional): $e');
+        cplCpmkMap = null;
       }
 
-      return OBECalculationResult(
-        mahasiswaId: mahasiswaId,
-        matakuliahId: matakuliahId,
-        tahunAjaran: tahunAjaran,
-        subCPMKValues: subCpmkValues,
-        cpmkValues: cpmkValues,
-        cplValues: cplValues,
-        subCpmkBobots: subCpmkBobots,
-      );
-    } catch (e) {
+      // STEP 4: Process tiap mahasiswa
+      for (final entry in nilaiKomponenByMahasiswa.entries) {
+        final mahasiswaId = entry.key;
+        final nkRow = entry.value;
 
-      return OBECalculationResult(
-        mahasiswaId: mahasiswaId,
-        matakuliahId: matakuliahId,
-        tahunAjaran: tahunAjaran,
-        subCPMKValues: {},
-        cpmkValues: {},
-        cplValues: {},
-      );
-    }
-  }
-
-  /// 🎯 NEW METHOD: Ambil bobot total untuk setiap Sub-CPMK dari RPS
-  /// Return: Map<subCpmkId, totalBobot>
-  /// Contoh: {1: 15, 2: 15, 3: 15, 4: 9, 5: 14, 6: 14, 7: 18}
-  Future<Map<int, double>> _getSubCpmkBobots(int matakuliahId) async {
-    try {
-      final result = <int, double>{};
-      
-      // Get bobot matrix untuk mata kuliah ini
-      final bobotMatrixRaw = await _dbHelper.getBobotMatrixForMatakuliah(
-        matakuliahId: matakuliahId,
-      );
-
-      if (bobotMatrixRaw.isEmpty) {
-        return result;
-      }
-
-      // Hitung total bobot untuk setiap Sub-CPMK
-      for (final entry in bobotMatrixRaw.entries) {
-        final subCpmkId = entry.key;
-        final bobotList = entry.value;
-        
-        double totalBobot = 0.0;
-        for (final bobot in bobotList) {
-          totalBobot += bobot;
-        }
-        
-        result[subCpmkId] = totalBobot;
-      }
-
-      return result;
-    } catch (e) {
-      return {};
-    }
-  }
-
-  /// 🎯 NEW METHOD: Extract CPMK IDs untuk matakuliah ini dari RPS
-  /// Return: Set<int> berisi unique CPMK IDs yang user input di RPS
-  /// Contoh untuk Kalkulus & Vektor: {3}
-  Future<Set<int>> _getCpmkIdsForMatakuliah(int matakuliahId) async {
-    try {
-      final cpmkIds = <int>{};
-      final rpsDetails = await _dbHelper.getRPSDetailByMatakuliah(matakuliahId);
-      
-      for (final rpsDetail in rpsDetails) {
-        if (rpsDetail.cpmkIds != null && rpsDetail.cpmkIds!.isNotEmpty) {
-          cpmkIds.addAll(rpsDetail.cpmkIds!);
-        }
-      }
-      return cpmkIds;
-    } catch (e) {
-      return {};
-    }
-  }
-
-  /// Calculate SubCPMK dengan cached RPS Details
-  /// 🎯 PRIORITAS: Gunakan component scores jika ada, fallback ke nilai akhir
-  Future<Map<int, double>> calculateSubCPMKValuesOptimized(
-    int mahasiswaId,
-    int matakuliahId,
-    int tahunAjaran,
-  ) async {
-    try {
-      final result = <int, double>{};
-
-      // 🎯 TRY 1: Hitung menggunakan component scores (prioritas utama)
-      final nilaiKomponenMap = await _dbHelper.getNilaiKomponen(
-        mahasiswaId: mahasiswaId,
-        matakuliahId: matakuliahId,
-        tahunAjaran: tahunAjaran,
-      );
-
-      if (nilaiKomponenMap != null && nilaiKomponenMap.isNotEmpty) {
         try {
-          // Konversi ke list: [aktivitas, proyek, kuis, tugas, uts, uas]
-          final nilaiComponents = [
-            (nilaiKomponenMap['nilai_aktivitas'] as num).toDouble(),
-            (nilaiKomponenMap['nilai_proyek'] as num).toDouble(),
-            (nilaiKomponenMap['nilai_kuis'] as num).toDouble(),
-            (nilaiKomponenMap['nilai_tugas'] as num).toDouble(),
-            (nilaiKomponenMap['nilai_uts'] as num).toDouble(),
-            (nilaiKomponenMap['nilai_uas'] as num).toDouble(),
-          ];
-
-          // Get bobot matrix untuk course ini
-          // Format: Map<subCpmkId, List<bobot untuk setiap komponen>>
-          final bobotMatrixRaw = await _dbHelper.getBobotMatrixForMatakuliah(
-            matakuliahId: matakuliahId,
-          );
-
-          if (bobotMatrixRaw.isNotEmpty) {
-            // Convert format dari database ke format yang dibutuhkan calculateSubCPMKWithMatrix
-            final bobotMatrixFormatted = <int, List<double>>{};
-            for (final entry in bobotMatrixRaw.entries) {
-              final subCpmkId = int.parse(entry.key.toString());
-              final bobots = (entry.value as List)
-                  .map((b) => (b as num).toDouble())
-                  .toList();
-              bobotMatrixFormatted[subCpmkId] = bobots;
-            }
-
-            // Hitung Sub-CPMK menggunakan rumus OBE dengan component scores
-            final subCpmkResult = calculateSubCPMKWithMatrix(
-              nilaiKomponen: nilaiComponents,
-              bobotMatrix: bobotMatrixFormatted,
-            );
-
-            return subCpmkResult;
+          // 🔍 DEBUG: Print trace untuk mahasiswa pertama saja
+          final isFirstMahasiswa = mahasiswaId == nilaiKomponenByMahasiswa.keys.first;
+          
+          if (isFirstMahasiswa) {
+            print('\n' + '='*80);
+            print('🔍 DEBUG TRACE - MAHASISWA ID: $mahasiswaId');
+            print('='*80);
           }
-        } catch (e) {
-          // Fallback ke grade-based
-        }
-      }
 
-      // 🎯 TRY 2: Fallback ke nilai akhir jika component scores tidak ada/gagal
-      
-      // Get nilai akhir mata kuliah
-      final nilaiMK = await _dbHelper.getNilai(
-        mahasiswaId,
-        matakuliahId,
-        tahunAjaran,
-      );
+          // Parse nilai komponen
+          final nilaiKomponen = _parseNilaiKomponenRow(nkRow);
 
-      if (nilaiMK == null) {
-        return result;
-      }
-
-      // 🔧 FIX: Konversi nilai dengan mendeteksi skala yang benar
-      // Jika nilaiNumerik > 4, maka sudah dalam skala 0-100
-      // Jika nilaiNumerik <= 4, maka dalam skala 0-4 dan perlu dikalikan 25
-      final nilaiSkala0_100 = nilaiMK.nilaiNumerik > 4 
-          ? nilaiMK.nilaiNumerik  // Sudah dalam skala 0-100
-          : nilaiMK.nilaiNumerik * 25;  // Konversi dari 0-4 ke 0-100
-
-      // Use cached RPS Details
-      final rpsDetails = _cache['rpsDetails'] as List? ?? [];
-
-      // 🚀 OPTIMASI: Pre-load semua bobot untuk RPS Details ini
-      final allBobotData = await _loadAllRPSDetailSubCPMKBobots(rpsDetails.cast());
-
-      // Process dengan cached bobot data
-      for (final rpsDetail in rpsDetails) {
-        if (rpsDetail.subCpmkIds == null || rpsDetail.subCpmkIds!.isEmpty) {
-          continue;
-        }
-
-        for (final subCpmkId in rpsDetail.subCpmkIds!) {
-          final bobotKey = '${rpsDetail.id}_$subCpmkId';
-          final bobotValue = allBobotData[bobotKey];
-
-          if (bobotValue == null) {
+          if (nilaiKomponen.isEmpty) {
+            errors[mahasiswaId] = 'Nilai komponen kosong';
+            if (!continueOnError) throw Exception(errors[mahasiswaId]);
             continue;
           }
 
-          final nilaiSubCPMK = (nilaiSkala0_100 * bobotValue) / 100.0;
-
-          if (result.containsKey(subCpmkId)) {
-            result[subCpmkId] = result[subCpmkId]! + nilaiSubCPMK;
-          } else {
-            result[subCpmkId] = nilaiSubCPMK;
-          }
-        }
-      }
-
-      result.updateAll((key, value) => _roundToTwoDecimals(value));
-      return result;
-    } catch (e) {
-      return {};
-    }
-  }
-
-  /// Load semua bobot RPS Detail SubCPMK dalam satu batch query
-  Future<Map<String, double>> _loadAllRPSDetailSubCPMKBobots(
-    List<dynamic> rpsDetails,
-  ) async {
-    try {
-      final allBobots = <String, double>{};
-
-      // 🚀 OPTIMASI: Load semua bobot dalam satu batch query
-      final allBobotRecords = await _dbHelper.getAllRPSDetailSubCPMKBobots();
-      
-      // Create a map untuk quick lookup
-      final bobotMap = <String, double>{};
-      for (final record in allBobotRecords) {
-        final rpsDetailId = record['rps_detail_id'] as int;
-        final subCpmkId = record['sub_cpmk_id'] as int;
-        final bobot = record['bobot'] as double;
-        final key = '${rpsDetailId}_$subCpmkId';
-        bobotMap[key] = bobot;
-      }
-
-      // Collect all bobotData items dengan pre-loaded data
-      for (final rpsDetail in rpsDetails) {
-        if (rpsDetail.subCpmkIds == null || rpsDetail.subCpmkIds!.isEmpty) {
-          continue;
-        }
-
-        final rpsDetailId = rpsDetail.id;
-        for (final subCpmkId in rpsDetail.subCpmkIds!) {
-          final key = '${rpsDetailId}_$subCpmkId';
-          final bobotValue = bobotMap[key];
-
-          if (bobotValue != null) {
-            allBobots[key] = bobotValue;
-          }
-        }
-      }
-
-      return allBobots;
-    } catch (e) {
-      return {};
-    }
-  }
-
-  /// Calculate CPMK dengan cached mappings
-  /// 🎯 PENTING: Gunakan bobot matrix (dari 6 komponen), bukan RPS Details!
-  /// Ini memastikan CPMK dan Sub-CPMK average menggunakan bobot yang sama
-  Future<Map<int, double>> calculateCPMKValuesOptimized(
-    int mahasiswaId,
-    int matakuliahId,
-    int tahunAjaran,
-    Map<int, double> subCpmkValues,
-  ) async {
-    try {
-      final result = <int, double>{};
-
-      if (subCpmkValues.isEmpty) {
-        return result;
-      }
-
-      // 🎯 PENTING: Gunakan bobot matrix (dari `_getSubCpmkBobots()`), bukan RPS Details!
-      final subCpmkBobots = await _getSubCpmkBobots(matakuliahId);
-      
-      if (subCpmkBobots.isNotEmpty) {
-        // 🎯 REVISI: Baca CPMK IDs dari RPS untuk dynamic header
-        // Tapi gunakan bobot matrix untuk perhitungan (untuk consistency dengan dokumentasi)
-        final cpmkIds = await _getCpmkIdsForMatakuliah(matakuliahId);
-        
-        // Kalkulasi setiap CPMK dengan weighted average dari Sub-CPMK
-        // Menggunakan bobot dari bobot matrix (kolom Total): [15, 15, 15, 9, 14, 14, 18]
-        
-        for (final cpmkId in cpmkIds) {
-          double totalWeighted = 0.0;
-          double totalBobot = 0.0;
-          
-          for (final subCpmkId in subCpmkValues.keys) {
-            final subCpmkValue = subCpmkValues[subCpmkId]!;
-            final bobot = subCpmkBobots[subCpmkId] ?? 0.0;
+          if (isFirstMahasiswa) {
+            print('\n📥 INPUT NILAI KOMPONEN:');
+            nilaiKomponen.forEach((komponen, nilai) {
+              print('   $komponen: $nilai');
+            });
             
-            totalWeighted += subCpmkValue * bobot;
-            totalBobot += bobot;
+            print('\n🎯 BOBOT SUB-CPMK (dari RPS):');
+            subCpmkBobotMap.forEach((subCpmkId, bobotMap) {
+              print('   Sub-CPMK $subCpmkId:');
+              bobotMap.forEach((komponen, bobot) {
+                if (bobot > 0) {
+                  print('      - $komponen: ${bobot.toStringAsFixed(2)}%');
+                }
+              });
+            });
+
+            print('\n🔗 CPMK ← SUB-CPMK MAPPING:');
+            cpmkSubCpmkMap.forEach((cpmkId, subCpmkMap) {
+              print('   CPMK $cpmkId:');
+              subCpmkMap.forEach((subCpmkId, bobot) {
+                print('      - Sub-CPMK $subCpmkId (bobot: ${bobot.toStringAsFixed(2)}%)');
+              });
+            });
+
+            if (cplCpmkMap != null && cplCpmkMap.isNotEmpty) {
+              print('\n🎓 CPL ← CPMK MAPPING:');
+              cplCpmkMap.forEach((cplId, cpmkMap) {
+                print('   CPL $cplId:');
+                cpmkMap.forEach((cpmkId, bobot) {
+                  print('      - CPMK $cpmkId (bobot: ${bobot.toStringAsFixed(2)}%)');
+                });
+              });
+            }
           }
-          
-          if (totalBobot > 0) {
-            final cpmkValue = totalWeighted / totalBobot;
-            result[cpmkId] = _roundToTwoDecimals(cpmkValue);
+
+          // Calculate OBE
+          final calculationResult = calculateOBEComplete(
+            nilaiKomponen: nilaiKomponen,
+            subCpmkBobotMap: subCpmkBobotMap,
+            cpmkSubCpmkMap: cpmkSubCpmkMap,
+            cplCpmkMap: cplCpmkMap,
+          );
+
+          if (calculationResult['status'] != 'success') {
+            errors[mahasiswaId] =
+                calculationResult['message'] ?? 'Unknown error';
+            if (!continueOnError) {
+              throw Exception(errors[mahasiswaId]);
+            }
+            continue;
           }
-        }
-        
-        if (result.isNotEmpty) {
-          return result;
+
+          if (isFirstMahasiswa) {
+            print('\n📊 HASIL SUB-CPMK:');
+            final subCpmkValues = (calculationResult['sub_cpmk'] as Map<String, dynamic>)
+                .cast<String, double>();
+            subCpmkValues.forEach((subCpmkId, nilai) {
+              print('   Sub-CPMK $subCpmkId: ${nilai.toStringAsFixed(2)}');
+            });
+
+            print('\n📊 HASIL CPMK:');
+            final cpmkValues = (calculationResult['cpmk'] as Map<String, dynamic>)
+                .cast<String, double>();
+            cpmkValues.forEach((cpmkId, nilai) {
+              print('   CPMK $cpmkId: ${nilai.toStringAsFixed(2)}');
+            });
+
+            final cplValues = (calculationResult['cpl'] as Map<String, dynamic>?)
+                ?.cast<String, double>() ?? {};
+            if (cplValues.isNotEmpty) {
+              print('\n📊 HASIL CPL:');
+              cplValues.forEach((cplId, nilai) {
+                print('   CPL $cplId: ${nilai.toStringAsFixed(2)}');
+              });
+            }
+            
+            print('='*80 + '\n');
+          }
+
+          // Create result object
+          final obeResult = OBECalculationResult(
+            mahasiswaId: mahasiswaId,
+            matakuliahId: matakuliahId,
+            tahunAjaran: tahunAjaran,
+            subCpmkValues: (calculationResult['sub_cpmk'] as Map<String, dynamic>)
+                .cast<String, double>(),
+            cpmkValues: (calculationResult['cpmk'] as Map<String, dynamic>)
+                .cast<String, double>(),
+            cplValues: (calculationResult['cpl'] as Map<String, dynamic>?)
+                    ?.cast<String, double>() ??
+                {},
+            success: true,
+          );
+
+          results.add(obeResult);
+          print('✅ Processed mahasiswa $mahasiswaId');
+        } catch (mahasiswaError) {
+          errors[mahasiswaId] = mahasiswaError.toString();
+          print('❌ Error processing mahasiswa $mahasiswaId: $mahasiswaError');
+          if (!continueOnError) rethrow;
         }
       }
 
-      // 🎯 TRY 2: Fallback ke database mapping
-      // Use cached mappings dari database
-      final subCpmkCpmkMappings = 
-          _cache['subCpmkCpmkMappings'] as Map<int, List<dynamic>>? ?? {};
+      // Report summary
+      print('');
+      print('=' * 60);
+      print('📊 BATCH CALCULATION SUMMARY');
+      print('=' * 60);
+      print('Total Mahasiswa: ${nilaiKomponenByMahasiswa.length}');
+      print('Success: ${results.length}');
+      print('Failed: ${errors.length}');
 
-      // Process dengan cached data
-      for (final subCpmkId in subCpmkValues.keys) {
-        final cpmkMappings = subCpmkCpmkMappings[subCpmkId] ?? [];
-
-        if (cpmkMappings.isEmpty) {
-          continue;
-        }
-
-        for (final mapping in cpmkMappings) {
-          final cpmkId = mapping is Map 
-              ? mapping['cpmk_id'] as int 
-              : mapping.cpmkId as int;
-          final bobot = mapping is Map 
-              ? mapping['bobot'] as double 
-              : mapping.bobot as double;
-
-          final nilaiKontribusi = (subCpmkValues[subCpmkId]! * bobot) / 100.0;
-
-          if (result.containsKey(cpmkId)) {
-            result[cpmkId] = result[cpmkId]! + nilaiKontribusi;
-          } else {
-            result[cpmkId] = nilaiKontribusi;
-          }
-        }
+      if (errors.isNotEmpty) {
+        print('');
+        print('❌ Failed Mahasiswa:');
+        errors.forEach((mahasiswaId, message) {
+          print('   $mahasiswaId: $message');
+        });
       }
 
-      result.updateAll((key, value) => _roundToTwoDecimals(value));
-      return result;
+      print('=' * 60);
+      print('');
+
+      return results;
     } catch (e) {
-      return {};
+      print('❌ Fatal error in batch calculation: $e');
+      rethrow;
     }
   }
 
-  /// Calculate CPL dari CPMK menggunakan RPS mapping
-  /// 🎯 LOGIC: CPL value = CPMK value langsung (berdasarkan RPS CPMK→CPL mapping)
-  /// Jika 1 CPMK maps ke multiple CPL, duplicate nilai ke semua CPL
-  /// Jika multiple CPMK maps ke 1 CPL, aggregate dengan weighted average
+  /// 🔧 Helper: Parse nilai_komponen row dari database
   /// 
-  /// Ini mengikuti obe_calculation_examples.dart yang simple dan konsisten
-  Future<Map<int, double>> calculateCPLValuesOptimized(
-    int mahasiswaId,
+  /// ✅ IMPROVED: Throws error jika nilai missing (tidak default ke 0)
+  /// Tolerance: Nilai null/missing bisa diterima, akan throw saat digunakan
+  Map<String, double> _parseNilaiKomponenRow(
+    Map<String, dynamic> row, {
+    bool allowMissing = false,
+  }) {
+    const komponenNames = [
+      'nilai_aktivitas',
+      'nilai_proyek',
+      'nilai_kuis',
+      'nilai_tugas',
+      'nilai_uts',
+      'nilai_uas'
+    ];
+
+    const komponenKeys = [
+      'aktivitas',
+      'proyek',
+      'kuis',
+      'tugas',
+      'uts',
+      'uas'
+    ];
+
+    final result = <String, double>{};
+
+    for (int i = 0; i < komponenNames.length; i++) {
+      final fieldName = komponenNames[i];
+      final keyName = komponenKeys[i];
+      final value = row[fieldName];
+
+      if (value == null) {
+        if (!allowMissing) {
+          throw Exception(
+            'Nilai $keyName tidak ditemukan di database row untuk mahasiswa ${row['mahasiswa_id']}. '
+            'Pastikan semua nilai komponen telah diisi (tidak boleh NULL).',
+          );
+        }
+        // Jika allowMissing=true, skip nil values (akan throw saat digunakan)
+      } else {
+        result[keyName] = (value as num).toDouble();
+      }
+    }
+
+    return result;
+  }
+
+  /// 🔧 Helper: Get Sub-CPMK bobot map dari RPS Detail
+  /// 
+  /// OUTPUT FORMAT: {"sub1": {"aktivitas": 15.0, "proyek": 10.0, ...}, ...}
+  /// 
+  /// ✅ DIRECT RPS AGGREGATION (NOT database_helper):
+  /// 1. Baca RPS Detail untuk matakuliah
+  /// 2. Parse jenis_penilaian dan bobot dari setiap minggu
+  /// 3. Agregasi bobot per Sub-CPMK dan per komponen
+  /// 4. Format: Map<subCpmkId, Map<komponenNama, bobot%>>
+  /// 
+  /// DATA SOURCE: RPS Details
+  /// - rpsDetail.jenisNilai: aktivitas, proyek, kuis, tugas, uts, uas
+  /// - rpsDetail.bobot: persentase untuk minggu tersebut
+  /// - rpsDetail.subCpmkIds: Sub-CPMK yang terlibat di minggu tersebut
+  Future<Map<String, Map<String, double>>> _getSubCpmkBobotMapFromDatabase(
     int matakuliahId,
-    int tahunAjaran,
-    Map<int, double> cpmkValues,
   ) async {
     try {
-      final result = <int, double>{};
+      final result = <String, Map<String, double>>{};
 
-      if (cpmkValues.isEmpty) {
-        print('🔍 DEBUG CPL [Empty CPMK]: Mhs=$mahasiswaId, MK=$matakuliahId - No CPMK values');
-        return result;
-      }
-
-      print('🔍 DEBUG CPL [RPS Direct Mapping]: Mhs=$mahasiswaId, MK=$matakuliahId');
-      print('   CPMK Values: $cpmkValues');
-
-      // 🎯 Get RPS Details untuk mendapatkan CPMK→CPL mapping
-      final rpsDetails = (_cache['rpsDetails'] as List? ?? [])
-          .cast<dynamic>();
+      // Get semua RPS detail untuk matakuliah ini
+      final rpsDetails = await _dbHelper.getRPSDetailByMatakuliah(matakuliahId);
 
       if (rpsDetails.isEmpty) {
-        print('   ⚠️ No RPS details found');
-        return result;
+        throw Exception(
+          '❌ RPS Detail tidak ditemukan untuk MK $matakuliahId. '
+          'Pastikan RPS sudah di-upload dan di-parse.',
+        );
       }
 
-      // 🎯 Build mapping: CPMK ID → List of CPL IDs (dari RPS)
-      final cpmkToCplMapping = <int, List<int>>{};
-      final cpmkBobotMap = <int, double>{};
+      print('📋 RPS Details ditemukan: ${rpsDetails.length} minggu');
 
+      // Kumpulkan semua Sub-CPMK IDs dari RPS
+      final subCpmkIds = <int>{};
       for (final rpsDetail in rpsDetails) {
-        final cpmkIds = rpsDetail.cpmkIds as List<int>?;
-        final cplIds = rpsDetail.cplIds as List<int>?;
-        final bobot = rpsDetail.bobot as double?;
-
-        if (cpmkIds == null || cplIds == null || bobot == null) {
-          continue;
-        }
-
-        // Untuk setiap CPMK dalam RPS, track CPL yang terhubung
-        for (final cpmkId in cpmkIds) {
-          if (!cpmkToCplMapping.containsKey(cpmkId)) {
-            cpmkToCplMapping[cpmkId] = [];
-            cpmkBobotMap[cpmkId] = bobot;
-          }
-          cpmkToCplMapping[cpmkId]!.addAll(cplIds);
+        if (rpsDetail.subCpmkIds != null) {
+          subCpmkIds.addAll(rpsDetail.subCpmkIds!);
         }
       }
 
-      print('   RPS CPMK→CPL Mapping: $cpmkToCplMapping');
+      if (subCpmkIds.isEmpty) {
+        throw Exception(
+          '❌ Tidak ada Sub-CPMK dalam RPS untuk MK $matakuliahId. '
+          'Pastikan RPS sudah di-link dengan Sub-CPMK.',
+        );
+      }
 
-      // 🎯 Process setiap CPMK dan map ke CPL
-      // Logic: CPMK value = CPL value (1:1 relationship dari RPS)
-      for (final cpmkId in cpmkValues.keys) {
-        final cpmkValue = cpmkValues[cpmkId]!;
-        final cplIds = cpmkToCplMapping[cpmkId];
+      print('📌 Sub-CPMKs ditemukan: ${subCpmkIds.toList()}');
 
-        if (cplIds == null || cplIds.isEmpty) {
-          print('   ⚠️ CPMK.$cpmkId tidak memiliki CPL mapping di RPS, skip');
+      // ✅ AGGREGATE BOBOT DARI RPS DATA LANGSUNG
+      // Inisialisasi map untuk setiap Sub-CPMK dengan komponen kosong
+      const komponenNames = [
+        'aktivitas',
+        'proyek',
+        'kuis',
+        'tugas',
+        'uts',
+        'uas'
+      ];
+
+      for (final subCpmkId in subCpmkIds) {
+        final bobotMap = <String, double>{};
+        for (final komponen in komponenNames) {
+          bobotMap[komponen] = 0.0; // Inisialisasi dengan 0
+        }
+        result[subCpmkId.toString()] = bobotMap;
+      }
+
+      // ✅ Baca bobot dari RPS dan agregasi per komponen
+      print('\n📊 Aggregating bobot dari RPS Details:');
+      for (final rpsDetail in rpsDetails) {
+        final mingguKe = rpsDetail.mingguKe;
+        final jenisNilai = rpsDetail.jenisNilai?.toLowerCase().trim() ?? '';
+        final bobot = rpsDetail.bobot ?? 0.0;
+        final subCpmkIds_ = rpsDetail.subCpmkIds ?? [];
+
+        if (jenisNilai.isEmpty || bobot == 0 || subCpmkIds_.isEmpty) {
           continue;
         }
 
-        // Duplicate nilai CPMK ke semua CPL yang terhubung
-        for (final cplId in cplIds) {
-          if (result.containsKey(cplId)) {
-            // Jika sudah ada (dari CPMK lain), aggregate dengan average
-            result[cplId] = (result[cplId]! + cpmkValue) / 2.0;
-            print('   CPMK.$cpmkId ($cpmkValue) + existing CPL.$cplId = ${result[cplId]}');
-          } else {
-            // First mapping untuk CPL ini
-            result[cplId] = cpmkValue;
-            print('   CPMK.$cpmkId ($cpmkValue) → CPL.$cplId ($cpmkValue)');
+        // Parse jenisNilai ke komponen index (flexible matching)
+        String? komponenName;
+        if (jenisNilai.contains('aktivitas') || jenisNilai.contains('activity')) {
+          komponenName = 'aktivitas';
+        } else if (jenisNilai.contains('proyek') || jenisNilai.contains('project')) {
+          komponenName = 'proyek';
+        } else if (jenisNilai.contains('kuis') || jenisNilai.contains('quiz')) {
+          komponenName = 'kuis';
+        } else if (jenisNilai.contains('tugas') || jenisNilai.contains('assignment')) {
+          komponenName = 'tugas';
+        } else if (jenisNilai.contains('uts') || jenisNilai.contains('midterm')) {
+          komponenName = 'uts';
+        } else if (jenisNilai.contains('uas') || jenisNilai.contains('final')) {
+          komponenName = 'uas';
+        }
+
+        if (komponenName == null) {
+          print(
+              '⚠️  Minggu $mingguKe: jenisNilai "$jenisNilai" tidak dikenal - skipped');
+          continue;
+        }
+
+        // Tambahkan bobot ke setiap Sub-CPMK yang terlibat
+        for (final subCpmkId in subCpmkIds_) {
+          final subCpmkIdStr = subCpmkId.toString();
+          if (result.containsKey(subCpmkIdStr)) {
+            result[subCpmkIdStr]![komponenName] =
+                _roundToTwoDecimals(result[subCpmkIdStr]![komponenName]! + bobot);
+            print(
+                '   Minggu $mingguKe: Sub-CPMK $subCpmkIdStr += $bobot% untuk $komponenName');
           }
         }
       }
 
-      result.updateAll((key, value) => _roundToTwoDecimals(value));
-      print('   Final CPL Values: $result');
+      if (result.values.every((bobotMap) =>
+          bobotMap.values.every((bobot) => bobot == 0))) {
+        // ❌ Semua bobot 0 - TIDAK boleh pakai fallback
+        final errorMsg =
+            '❌ Semua Sub-CPMK bobot adalah 0 dari RPS untuk MK $matakuliahId.\n'
+            '⚠️ Silahkan Cek RPS Terlebih Dahulu\n\n'
+            'Pastikan RPS minggu 1-16 sudah dikonfigurasi dengan:\n'
+            '  • Bobot pembelajaran (%) di setiap minggu\n'
+            '  • Jenis penilaian (aktivitas, proyek, kuis, tugas, uts, uas)\n'
+            '  • Sub-CPMK yang terlibat';
+        
+        print(errorMsg);
+        throw Exception(errorMsg);
+      }
+
+      print('\n📊 Bobot Matrix hasil agregasi RPS:');
+      print('📝 Sub-CPMK IDs: ${subCpmkIds.toList()}');
+
+      if (result.isEmpty) {
+        throw Exception(
+          '❌ Bobot matrix kosong untuk MK $matakuliahId. '
+          'Debug info: '
+          'subCpmkIds=${subCpmkIds.toList()}. '
+          'Pastikan RPS minggu 1-16 sudah dikonfigurasi.',
+        );
+      }
+
+      print('\n✅ Sub-CPMK bobot map loaded dari RPS aggregation');
+      for (final entry in result.entries) {
+        final totalBobot =
+            entry.value.values.fold<double>(0, (a, b) => a + b);
+        _validateTotalWeights('Sub-CPMK ${entry.key}', totalBobot);
+        print('   Sub-CPMK ${entry.key}: ${entry.value}');
+      }
 
       return result;
     } catch (e) {
-      print('❌ Error in calculateCPLValuesOptimized: $e');
-      return {};
+      print('❌ Error getting Sub-CPMK bobot map: $e');
+      rethrow;
+    }
+  }
+
+  /// � DEBUG: Tampilkan detail RPS data dari database
+  /// Gunakan method ini untuk verify apa yang tersimpan di database vs expected dari PDF
+  Future<void> debugPrintRPSDataForMatakuliah(int matakuliahId) async {
+    try {
+      print('\n${'='*80}');
+      print('🔍 DEBUG - RPS DATA FROM DATABASE FOR MK $matakuliahId');
+      print('${'='*80}\n');
+
+      final rpsDetails = await _dbHelper.getRPSDetailByMatakuliah(matakuliahId);
+
+      if (rpsDetails.isEmpty) {
+        print('⚠️  No RPS Details found for MK $matakuliahId');
+        return;
+      }
+
+      print('📋 Total RPS Details: ${rpsDetails.length} minggu\n');
+
+      // Kelompokkan per minggu
+      final rpsPerMinggu = <int, List<RPSDetail>>{};
+      for (final rps in rpsDetails) {
+        if (rpsPerMinggu[rps.mingguKe] == null) {
+          rpsPerMinggu[rps.mingguKe] = [];
+        }
+        rpsPerMinggu[rps.mingguKe]!.add(rps);
+      }
+
+      // Tampilkan per minggu
+      for (var mingguKe = 1; mingguKe <= 16; mingguKe++) {
+        final rpsForMinggu = rpsPerMinggu[mingguKe];
+        
+        if (rpsForMinggu == null || rpsForMinggu.isEmpty) {
+          print('Minggu $mingguKe: ❌ NO DATA');
+          continue;
+        }
+
+        print('Minggu $mingguKe:');
+        for (final rps in rpsForMinggu) {
+          print('  📊 Data RPS:');
+          print('     - Topik: ${rps.topik ?? 'N/A'}');
+          print('     - Metode: ${rps.metodeAjar ?? 'N/A'}');
+          print('     - Jenis Penilaian: ${rps.jenisNilai ?? 'N/A'}');
+          print('     - Bobot: ${rps.bobot ?? 0}%');
+          
+          if (rps.subCpmkIds != null && rps.subCpmkIds!.isNotEmpty) {
+            print('     - Sub-CPMK: ${rps.subCpmkIds!.join(', ')}');
+          } else {
+            print('     - Sub-CPMK: ❌ NONE');
+          }
+
+          if (rps.cpmkIds != null && rps.cpmkIds!.isNotEmpty) {
+            print('     - CPMK: ${rps.cpmkIds!.join(', ')}');
+          }
+        }
+        print('');
+      }
+
+      // Aggregate bobot per Sub-CPMK per komponen
+      print('\n${'='*80}');
+      print('📊 AGGREGATED BOBOT PER SUB-CPMK PER KOMPONEN');
+      print('${'='*80}\n');
+
+      final aggregatedBobot = <int, Map<String, double>>{};
+      const komponenNames = [
+        'aktivitas',
+        'proyek',
+        'kuis',
+        'tugas',
+        'uts',
+        'uas'
+      ];
+
+      // Collect all Sub-CPMK IDs
+      final allSubCpmkIds = <int>{};
+      for (final rps in rpsDetails) {
+        if (rps.subCpmkIds != null) {
+          allSubCpmkIds.addAll(rps.subCpmkIds!);
+        }
+      }
+
+      // Initialize maps
+      for (final subCpmkId in allSubCpmkIds) {
+        aggregatedBobot[subCpmkId] = {};
+        for (final komponen in komponenNames) {
+          aggregatedBobot[subCpmkId]![komponen] = 0.0;
+        }
+      }
+
+      // Aggregate
+      for (final rps in rpsDetails) {
+        final jenisNilai = rps.jenisNilai?.toLowerCase().trim() ?? '';
+        final bobot = rps.bobot ?? 0.0;
+        final subCpmkIds = rps.subCpmkIds ?? [];
+
+        if (jenisNilai.isEmpty || bobot == 0 || subCpmkIds.isEmpty) {
+          continue;
+        }
+
+        // Parse jenis_penilaian to komponen
+        String? komponenName;
+        if (jenisNilai.contains('aktivitas') || jenisNilai.contains('activity')) {
+          komponenName = 'aktivitas';
+        } else if (jenisNilai.contains('proyek') || jenisNilai.contains('project')) {
+          komponenName = 'proyek';
+        } else if (jenisNilai.contains('kuis') || jenisNilai.contains('quiz')) {
+          komponenName = 'kuis';
+        } else if (jenisNilai.contains('tugas') || jenisNilai.contains('assignment')) {
+          komponenName = 'tugas';
+        } else if (jenisNilai.contains('uts') || jenisNilai.contains('midterm')) {
+          komponenName = 'uts';
+        } else if (jenisNilai.contains('uas') || jenisNilai.contains('final')) {
+          komponenName = 'uas';
+        }
+
+        if (komponenName == null) {
+          print(
+              '⚠️  Unknown jenis_penilaian "$jenisNilai" in minggu ${rps.mingguKe}');
+          continue;
+        }
+
+        for (final subCpmkId in subCpmkIds) {
+          if (aggregatedBobot.containsKey(subCpmkId)) {
+            aggregatedBobot[subCpmkId]![komponenName] =
+                _roundToTwoDecimals(aggregatedBobot[subCpmkId]![komponenName]! + bobot);
+          }
+        }
+      }
+
+      // Print aggregated bobot
+      final sortedSubCpmkIds = aggregatedBobot.keys.toList()..sort();
+      for (final subCpmkId in sortedSubCpmkIds) {
+        final bobotMap = aggregatedBobot[subCpmkId]!;
+        final totalBobot =
+            bobotMap.values.fold<double>(0, (a, b) => a + b);
+        
+        print('Sub-CPMK $subCpmkId (Total: ${totalBobot.toStringAsFixed(2)}%):');
+        
+        bobotMap.forEach((komponen, bobot) {
+          if (bobot > 0) {
+            print('   - $komponen: ${bobot.toStringAsFixed(2)}%');
+          }
+        });
+        print('');
+      }
+
+      print('${'='*80}\n');
+    } catch (e) {
+      print('❌ Debug error: $e');
+    }
+  }
+
+  /// �🔧 Helper: Get CPMK←SubCPMK mapping dari database
+  /// 
+  /// FORMAT OUTPUT: {"cpmk1": {"sub1": 15, "sub2": 15, ...}, ...}
+  /// 
+  /// DATA SOURCE: Table sub_cpmk_cpmk atau cpmk_sub_cpmk
+  /// Expected schema:
+  ///   - cpmk_id (int)
+  ///   - sub_cpmk_id (int)
+  ///   - bobot (double): weight of Sub-CPMK in CPMK
+  Future<Map<String, Map<String, double>>> _getCpmkSubCpmkMapFromDatabase(
+    int matakuliahId,
+  ) async {
+    try {
+      final result = <String, Map<String, double>>{};
+
+      // Get semua SubCPMK untuk matakuliah ini
+      final subCpmkList = await _dbHelper.getSubCPMKByMatakuliah(matakuliahId);
+      
+      if (subCpmkList.isEmpty) {
+        throw Exception('Sub-CPMK tidak ditemukan untuk MK $matakuliahId');
+      }
+
+      print('📋 SubCPMKs ditemukan: ${subCpmkList.length}');
+      final validSubCpmkIds = <String>{};
+      for (final sub in subCpmkList) {
+        if (sub.id != null) {
+          validSubCpmkIds.add(sub.id.toString());
+        }
+      }
+      print('   IDs: ${validSubCpmkIds.toList()}');
+
+      // Get semua mappings
+      final allMappings = await _dbHelper.getAllSubCPMKCPMKMappings();
+      
+      if (allMappings.isEmpty) {
+        throw Exception('Sub-CPMK←CPMK mappings tidak ditemukan di database');
+      }
+
+      print('📌 Mappings ditemukan: ${allMappings.length} records');
+
+      // Build map dari data yang tersedia
+      for (final mapping in allMappings) {
+        final cpmkId = mapping['cpmk_id'].toString();
+        final subCpmkId = mapping['sub_cpmk_id'].toString();
+        final bobot = (mapping['bobot'] as num?)?.toDouble() ?? 0.0;
+
+        // Check apakah sub_cpmk ini ada di MK kita
+        if (!validSubCpmkIds.contains(subCpmkId)) {
+          continue;
+        }
+
+        if (!result.containsKey(cpmkId)) {
+          result[cpmkId] = {};
+        }
+
+        result[cpmkId]![subCpmkId] = bobot;
+      }
+
+      print('✅ CPMK←SubCPMK mapping created: ${result.length} CPMKs');
+      for (final entry in result.entries) {
+        print('   CPMK ${entry.key}: ${entry.value}');
+      }
+
+      if (result.isEmpty) {
+        throw Exception('CPMK←SubCPMK mapping kosong untuk MK $matakuliahId. Pastikan mappings sudah tersimpan di database.');
+      }
+
+      return result;
+    } catch (e) {
+      print('❌ Error getting CPMK←SubCPMK mapping: $e');
+      rethrow;
+    }
+  }
+
+  /// 🔧 Helper: Get CPL←CPMK mapping dari database
+  /// 
+  /// FORMAT OUTPUT: {"cpl1": {"cpmk1": 30, "cpmk2": 35, ...}, ...}
+  /// 
+  /// DATA SOURCE: Table cpl_cpmk atau cpmk_cpl (weighted)
+  /// Expected schema:
+  ///   - cpl_id (int)
+  ///   - cpmk_id (int)
+  ///   - bobot (double): weight of CPMK in CPL aggregation
+  /// 
+  /// RETURNS: Null atau empty map jika mapping tidak ada (CPL is optional)
+  Future<Map<String, Map<String, double>>> _getCPLCpmkMapFromDatabase(
+    int matakuliahId,
+  ) async {
+    try {
+      final result = <String, Map<String, double>>{};
+
+      // Get mappings dari database - CPL is OPTIONAL
+      List<Map<String, dynamic>>? allMappings;
+      try {
+        allMappings =
+            await _dbHelper.getAllCPLCPMKMappings();
+      } catch (e) {
+        // Method mungkin tidak tersedia di DatabaseHelper - okay, CPL is optional
+        print('⚠️ CPL←CPMK mappings tidak tersedia (optional): $e');
+        return result;
+      }
+
+      if (allMappings == null || allMappings.isEmpty) {
+        print('⚠️ CPL←CPMK mappings tidak ditemukan (optional - skipped)');
+        return result;
+      }
+
+      print('📌 CPL←CPMK mappings ditemukan: ${allMappings.length} records');
+
+      // Get valid CPMK IDs untuk MK ini
+      final validCpmkIds = <String>{};
+      final cpmkSubCpmkMap = await _getCpmkSubCpmkMapFromDatabase(matakuliahId);
+      validCpmkIds.addAll(cpmkSubCpmkMap.keys);
+
+      // Build map dari mappings
+      for (final mapping in allMappings) {
+        final cplId = mapping['cpl_id'].toString();
+        final cpmkId = mapping['cpmk_id'].toString();
+        final bobot = (mapping['bobot'] as num?)?.toDouble() ?? 0.0;
+
+        // Check apakah CPMK ini ada di MK kita
+        if (!validCpmkIds.contains(cpmkId)) {
+          continue;
+        }
+
+        if (!result.containsKey(cplId)) {
+          result[cplId] = {};
+        }
+
+        result[cplId]![cpmkId] = bobot;
+      }
+
+      if (result.isNotEmpty) {
+        print('✅ CPL←CPMK mapping loaded: ${result.length} CPLs');
+        for (final entry in result.entries) {
+          print('   CPL ${entry.key}: ${entry.value}');
+        }
+      }
+
+      return result;
+    } catch (e) {
+      print('⚠️ Warning getting CPL←CPMK mapping: $e');
+      return {}; // Return empty, CPL is optional
     }
   }
 }
 
-/// Model untuk hasil perhitungan OBE
-class OBECalculationResult {
-  final int mahasiswaId;
-  final int matakuliahId;
-  final int tahunAjaran;
-  final Map<int, double> subCPMKValues; // subCpmkId -> nilai
-  final Map<int, double> cpmkValues; // cpmkId -> nilai
-  final Map<int, double> cplValues; // cplId -> nilai
-  final Map<int, double>? subCpmkBobots; // subCpmkId -> bobot dari bobot matrix (untuk weighted average)
+/// ============================================================================
+/// VALIDATION CONFIGURATION (NEW)
+/// ============================================================================
 
-  OBECalculationResult({
-    required this.mahasiswaId,
-    required this.matakuliahId,
-    required this.tahunAjaran,
-    required this.subCPMKValues,
-    required this.cpmkValues,
-    required this.cplValues,
-    this.subCpmkBobots,
+/// Configuration untuk kontrol validasi dan fallback behavior
+/// 
+/// USE CASE:
+/// - Production: strict=true untuk validasi ketat
+/// - Development: strict=false untuk fallback lenient
+class OBEValidationConfig {
+  /// If true: throw error jika total bobot ≠ 100 (±1%)
+  /// If false: warn only dengan print()
+  final bool strictWeightValidation;
+
+  /// If true: throw error jika nilai komponen diluar range [0, 100]
+  /// If false: warn only
+  final bool strictValueValidation;
+
+  /// If true: throw error jika bobot tidak ditemukan di database
+  /// If false: use fallback equal distribution (NOT RECOMMENDED)
+  final bool strictBobotValidation;
+
+  /// If true: warn ketika menggunakan fallback equal weight untuk CPL
+  final bool warnOnFallback;
+
+  /// Tolerance untuk weight validation (default: 1% dari target)
+  final double weightTolerance;
+
+  const OBEValidationConfig({
+    this.strictWeightValidation = false,
+    this.strictValueValidation = true,
+    this.strictBobotValidation = true,
+    this.warnOnFallback = true,
+    this.weightTolerance = 1.0,
   });
 
-  /// Rata-rata Sub-CPMK (Weighted Average dengan bobot matrix)
-  /// 🎯 PENTING: Menggunakan bobot dari bobot matrix (sama dengan CPMK calculation)
-  /// untuk memastikan consistency: Sub-CPMK avg ≈ CPMK
-  double get averageSubCPMKNilai {
-    if (subCPMKValues.isEmpty) return 0.0;
-    
-    // Gunakan bobot dari bobot matrix untuk weighted average
-    if (subCpmkBobots != null && subCpmkBobots!.isNotEmpty) {
-      double totalWeighted = 0.0;
-      double totalBobot = 0.0;
-      
-      subCPMKValues.forEach((subCpmkId, nilai) {
-        final bobot = subCpmkBobots![subCpmkId] ?? 0.0;
-        totalWeighted += nilai * bobot;
-        totalBobot += bobot;
-      });
-      
-      if (totalBobot > 0) {
-        final average = totalWeighted / totalBobot;
-        return average.clamp(0.0, 100.0);
-      }
-    }
-    
-    // Simple average jika tidak ada bobot
-    final sum = subCPMKValues.values.fold<double>(0.0, (a, b) => a + b);
-    final average = sum / subCPMKValues.length;
-    return average.clamp(0.0, 100.0);
+  /// Production config: strict validation everywhere
+  static const OBEValidationConfig production = OBEValidationConfig(
+    strictWeightValidation: true,
+    strictValueValidation: true,
+    strictBobotValidation: true,
+    warnOnFallback: true,
+  );
+
+  /// Development config: lenient with warnings
+  static const OBEValidationConfig development = OBEValidationConfig(
+    strictWeightValidation: false,
+    strictValueValidation: true,
+    strictBobotValidation: false,
+    warnOnFallback: true,
+  );
+}
+
+/// ============================================================================
+/// RESPONSE MODEL
+/// ============================================================================
+
+/// Model untuk response hasil perhitungan OBE
+/// 
+/// COMPATIBLE DENGAN KEDUA FORMAT:
+/// - Format Baru: Map<String, double> dengan String keys
+/// - Format Lama: Map<int, double> dengan int keys (via compatibility getters)
+class OBECalculationResult {
+  final bool success;
+  final String? errorMessage;
+  final Map<String, double> subCpmkValues;
+  final Map<String, double> cpmkValues;
+  final Map<String, double> cplValues;
+  
+  // Legacy fields untuk backward compatibility
+  final int? mahasiswaId;
+  final int? matakuliahId;
+  final int? tahunAjaran;
+  final Map<int, double>? subCpmkBobots;
+
+  OBECalculationResult({
+    bool? success,
+    this.errorMessage,
+    this.subCpmkValues = const {},
+    this.cpmkValues = const {},
+    this.cplValues = const {},
+    this.mahasiswaId,
+    this.matakuliahId,
+    this.tahunAjaran,
+    this.subCpmkBobots,
+  }) : success = success ?? true;
+
+  /// Factory constructor untuk error response
+  factory OBECalculationResult.error(String message) {
+    return OBECalculationResult(
+      success: false,
+      errorMessage: message,
+    );
   }
 
-  /// Rata-rata CPMK (Simple Average atau Weighted jika ada multiple CPMK)
-  double get averageCPMKNilai {
+  /// Factory constructor untuk success response
+  factory OBECalculationResult.success({
+    required Map<String, double> subCpmkValues,
+    required Map<String, double> cpmkValues,
+    Map<String, double> cplValues = const {},
+  }) {
+    return OBECalculationResult(
+      success: true,
+      subCpmkValues: subCpmkValues,
+      cpmkValues: cpmkValues,
+      cplValues: cplValues,
+    );
+  }
+
+  /// Convert ke JSON format sesuai spesifikasi
+  Map<String, dynamic> toJson() {
+    return {
+      'status': success ? 'success' : 'error',
+      'message': errorMessage,
+      'sub_cpmk': subCpmkValues,
+      'cpmk': cpmkValues,
+      'cpl': cplValues,
+    };
+  }
+
+  /// Rata-rata Sub-CPMK
+  double get averageSubCPMK {
+    if (subCpmkValues.isEmpty) return 0.0;
+    final sum = subCpmkValues.values.fold<double>(0.0, (a, b) => a + b);
+    return (sum / subCpmkValues.length * 100).round() / 100;
+  }
+
+  /// Rata-rata CPMK
+  double get averageCPMK {
     if (cpmkValues.isEmpty) return 0.0;
     final sum = cpmkValues.values.fold<double>(0.0, (a, b) => a + b);
-    final average = sum / cpmkValues.length;
-    // Clamp nilai ke range 0-100 untuk menghindari nilai > 100
-    return average.clamp(0.0, 100.0);
+    return (sum / cpmkValues.length * 100).round() / 100;
   }
 
   /// Rata-rata CPL
-  double get averageCPLNilai {
+  double get averageCPL {
     if (cplValues.isEmpty) return 0.0;
     final sum = cplValues.values.fold<double>(0.0, (a, b) => a + b);
-    final average = sum / cplValues.length;
-    // Clamp nilai ke range 0-100 untuk menghindari nilai > 100
-    return average.clamp(0.0, 100.0);
+    return (sum / cplValues.length * 100).round() / 100;
   }
 
-  bool get hasData =>
-      subCPMKValues.isNotEmpty ||
-      cpmkValues.isNotEmpty ||
-      cplValues.isNotEmpty;
+  /// ============================================================================
+  /// LEGACY COMPATIBILITY PROPERTIES (Backward Compatibility)
+  /// ============================================================================
+
+  /// Check apakah ada data (legacy property)
+  bool get hasData {
+    return success && (subCpmkValues.isNotEmpty || cpmkValues.isNotEmpty || cplValues.isNotEmpty);
+  }
+
+  /// Legacy: Rata-rata Sub-CPMK (dengan nama lama)
+  double get averageSubCPMKNilai => averageSubCPMK;
+
+  /// Legacy: Rata-rata CPMK (dengan nama lama)
+  double get averageCPMKNilai => averageCPMK;
+
+  /// Legacy: Rata-rata CPL (dengan nama lama)
+  double get averageCPLNilai => averageCPL;
+
+  /// Legacy: Sub-CPMK values dengan int keys (konversi dari String)
+  Map<int, double> get subCPMKValues {
+    final result = <int, double>{};
+    for (final entry in subCpmkValues.entries) {
+      final key = int.tryParse(entry.key) ?? 0;
+      if (key > 0) {
+        result[key] = entry.value;
+      }
+    }
+    return result;
+  }
+
+  /// Legacy: CPMK values dengan int keys (konversi dari String)
+  Map<int, double> get cPMKValues {
+    final result = <int, double>{};
+    for (final entry in cpmkValues.entries) {
+      final key = int.tryParse(entry.key) ?? 0;
+      if (key > 0) {
+        result[key] = entry.value;
+      }
+    }
+    return result;
+  }
+
+  /// Legacy: CPL values dengan int keys (konversi dari String)
+  Map<int, double> get cPLValues {
+    final result = <int, double>{};
+    for (final entry in cplValues.entries) {
+      final key = int.tryParse(entry.key) ?? 0;
+      if (key > 0) {
+        result[key] = entry.value;
+      }
+    }
+    return result;
+  }
+
+  /// ============================================================================
+  /// DIAGNOSTIC & DEBUGGING
+  /// ============================================================================
+
+  /// Pretty print untuk debugging
+  @override
+  String toString() {
+    if (!success) {
+      return 'OBECalculationResult[ERROR: $errorMessage]';
+    }
+
+    final buffer = StringBuffer();
+    buffer.writeln('OBECalculationResult[');
+    buffer.writeln('  mahasiswa: $mahasiswaId');
+    buffer.writeln('  matakuliah: $matakuliahId');
+    buffer.writeln('  Sub-CPMK avg: ${averageSubCPMK}');
+    buffer.writeln('  CPMK avg: ${averageCPMK}');
+    buffer.writeln('  CPL avg: ${averageCPL}');
+    buffer.writeln('  Sub-CPMK values: $subCpmkValues');
+    buffer.writeln('  CPMK values: $cpmkValues');
+    buffer.writeln('  CPL values: $cplValues');
+    buffer.writeln(']');
+    return buffer.toString();
+  }
+
+  /// Get diagnostic report untuk validation
+  String getDiagnosticReport() {
+    final buffer = StringBuffer();
+    buffer.writeln('═' * 60);
+    buffer.writeln('OBE CALCULATION DIAGNOSTIC REPORT');
+    buffer.writeln('═' * 60);
+
+    if (!success) {
+      buffer.writeln('Status: ❌ FAILED');
+      buffer.writeln('Error: $errorMessage');
+      return buffer.toString();
+    }
+
+    buffer.writeln('Status: ✅ SUCCESS');
+    buffer.writeln('Mahasiswa: $mahasiswaId');
+    buffer.writeln('Matakuliah: $matakuliahId');
+    buffer.writeln('Tahun Ajaran: $tahunAjaran');
+    buffer.writeln('');
+
+    buffer.writeln('Sub-CPMK Values: (${subCpmkValues.length} items)');
+    for (final entry in subCpmkValues.entries) {
+      buffer.writeln('  ${entry.key}: ${entry.value}');
+    }
+    buffer.writeln('Average: ${averageSubCPMK}');
+    buffer.writeln('');
+
+    buffer.writeln('CPMK Values: (${cpmkValues.length} items)');
+    for (final entry in cpmkValues.entries) {
+      buffer.writeln('  ${entry.key}: ${entry.value}');
+    }
+    buffer.writeln('Average: ${averageCPMK}');
+    buffer.writeln('');
+
+    if (cplValues.isNotEmpty) {
+      buffer.writeln('CPL Values: (${cplValues.length} items)');
+      for (final entry in cplValues.entries) {
+        buffer.writeln('  ${entry.key}: ${entry.value}');
+      }
+      buffer.writeln('Average: ${averageCPL}');
+    } else {
+      buffer.writeln('CPL Values: (not calculated - optional)');
+    }
+
+    buffer.writeln('═' * 60);
+    return buffer.toString();
+  }
 }

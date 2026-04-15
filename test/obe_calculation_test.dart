@@ -10,6 +10,9 @@ void main() {
     });
 
     test('✅ Verify Vira Indra Asih - Calculus & Vector Calculation', () {
+      // ℹ️ SETUP: Calculus & Vector (Kalkulus & Vektor)
+      // 1 Mata Kuliah → 1 CPMK → 7 Sub-CPMK
+      
       // Data
       const nilaiKomponen = [85.5, 85.5, 85.5, 85.5, 65.0, 75.0];
       // Komponen: [Aktivitas, Hasil Proyek, Kuis, Tugas, UTS, UAS]
@@ -60,6 +63,9 @@ void main() {
     });
 
     test('✅ Verify Vita juwita Sinurat - Calculus & Vector Calculation', () {
+      // ℹ️ SETUP: Calculus & Vector (Kalkulus & Vektor)
+      // 1 Mata Kuliah → 1 CPMK → 7 Sub-CPMK
+      
       // Data
       const nilaiKomponen = [87.5, 87.5, 87.5, 87.5, 60.0, 90.0];
       // Komponen: [Aktivitas, Hasil Proyek, Kuis, Tugas, UTS, UAS]
@@ -109,6 +115,10 @@ void main() {
     });
 
     test('✅ Test CPMK Calculation with 100% Total Weight', () {
+      // ℹ️ SETUP: 1 Mata Kuliah → 1 CPMK → 7 Sub-CPMK
+      // Kalkulus & Vektor memiliki CPMK ID = 1
+      // CPMK 1 terdiri dari 7 Sub-CPMK dengan bobot: [15, 15, 15, 9, 14, 14, 18] = 100%
+      
       // Sub-CPMK values (from previous calculation)
       final subCpmkValues = {
         1: 78.67,
@@ -120,17 +130,18 @@ void main() {
         7: 83.92,
       };
 
-      // Bobot Sub-CPMK to CPMK (assuming 1 CPMK with equal weight distribution)
-      // Total harus = 100
+      // Bobot Sub-CPMK to CPMK
+      // 1 mata kuliah hanya punya 1 CPMK dengan 7 Sub-CPMK
       final subCpmkBobot = {
-        1: {
-          1: 14.28,
-          2: 14.28,
-          3: 14.28,
-          4: 12.87,
-          5: 14.29,
-          6: 14.29,
-          7: 15.71,
+        1: {  // ← CPMK ID = 1 (satu-satunya CPMK untuk mata kuliah ini)
+          1: 15.0,  // Sub-CPMK 1 weight
+          2: 15.0,  // Sub-CPMK 2 weight
+          3: 15.0,  // Sub-CPMK 3 weight
+          4: 9.0,   // Sub-CPMK 4 weight
+          5: 14.0,  // Sub-CPMK 5 weight
+          6: 14.0,  // Sub-CPMK 6 weight
+          7: 18.0,  // Sub-CPMK 7 weight
+          // Total = 100%
         }
       };
 
@@ -143,8 +154,8 @@ void main() {
       // Expected CPMK ≈ 80.96 for Vira
       expect(cpmkResults[1], closeTo(80.96, 0.1));
 
-      print('✅ CPMK Calculation Verified');
-      print('   CPMK: ${cpmkResults[1]}');
+      print('✅ CPMK Calculation Verified (1 Mata Kuliah = 1 CPMK)');
+      print('   CPMK.1: ${cpmkResults[1]}');
     });
 
     test('❌ Should throw error if total bobot ≠ 100', () {
@@ -272,6 +283,9 @@ void main() {
     });
 
     test('✅ Full calculation Vira Indra Asih with CPMK', () {
+      // ℹ️ SETUP: Kalkulus & Vektor
+      // 1 Mata Kuliah → 1 CPMK → 7 Sub-CPMK
+      
       const nilaiKomponen = [85.5, 85.5, 85.5, 85.5, 65.0, 75.0];
 
       final bobotMatrix = {
@@ -284,16 +298,17 @@ void main() {
         7: [5.0, 0.0, 5.0, 5.0, 0.0, 3.0],
       };
 
-      // Sub-CPMK weights to CPMK
+      // Sub-CPMK weights to CPMK (1 mata kuliah = 1 CPMK dengan 7 Sub-CPMK)
+      // Bobot: [15, 15, 15, 9, 14, 14, 18] = 100%
       final subCpmkBobot = {
-        1: {
-          1: 14.28,
-          2: 14.28,
-          3: 14.28,
-          4: 12.87,
-          5: 14.29,
-          6: 14.29,
-          7: 15.71,
+        1: {  // ← CPMK ID = 1 (hanya ada 1 CPMK untuk mata kuliah ini)
+          1: 15.0,
+          2: 15.0,
+          3: 15.0,
+          4: 9.0,
+          5: 14.0,
+          6: 14.0,
+          7: 18.0,
         }
       };
 
@@ -306,8 +321,8 @@ void main() {
       // Corrected: with Sub7 = 83.75 (not 83.92), CPMK = 80.84 (not 80.96)
       expect(results[1], closeTo(80.84, 0.01));
 
-      print('✅ Full Integration Test Passed');
-      print('   CPMK Vira: ${results[1]}');
+      print('✅ Full Integration Test Passed (1 Mata Kuliah = 1 CPMK)');
+      print('   CPMK.1 Vira: ${results[1]}');
     });
 
     test('✅ Test CPL Calculation from RPS Bobot Aggregation', () {

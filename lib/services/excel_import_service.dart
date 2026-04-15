@@ -1678,71 +1678,92 @@ class ExcelImportService {
   }
 
   /// Helper method untuk auto-create Sub-CPMK → CPMK mapping
+  /// 🔧 IMPROVED: Baca mapping dari RPS data yang sudah di-import, bukan guess berdasarkan nomor
   Future<void> _createSubCPMKtoCPMKMappings(int matakuliahId) async {
     try {
-      // Get all Sub-CPMK for this matakuliah
-      final subCpmkList = await _dbHelper.getSubCPMKByMatakuliah(matakuliahId);
+      // Get all RPS details yang sudah di-import (ini punya Sub-CPMK IDs dan CPMK codes)
+      final rpsDetails = await _dbHelper.getRPSDetailByMatakuliah(matakuliahId);
       
-      if (subCpmkList.isEmpty) {
-        print('[RPS Batch Import] No Sub-CPMK found for matakuliah $matakuliahId');
+      if (rpsDetails.isEmpty) {
+        print('[RPS Batch Import] No RPS details found for matakuliah $matakuliahId - skipping mapping');
         return;
       }
 
-      // Get all CPMK (program-level)
+      // Get all CPMK untuk lookup
       final cpmkList = await _dbHelper.getAllCPMK();
+      final cpmkMap = <String, CPMK>{};
+      for (final cpmk in cpmkList) {
+        cpmkMap[cpmk.kodeCPMK.trim().toUpperCase()] = cpmk;
+      }
+
+      print('[RPS Batch Import] Creating Sub-CPMK → CPMK mappings dari RPS data');
+
+      // Build mapping dari RPS data: collect Sub-CPMK ↔ CPMK pairs
+      final mappingsToCreate = <({int subCpmkId, int cpmkId})>{};
       
-      print('[RPS Batch Import] Processing ${subCpmkList.length} Sub-CPMK for mapping');
-
-      // For each Sub-CPMK, find matching CPMK
-      for (final subCpmk in subCpmkList) {
-        if (subCpmk.id == null) continue;
-
-        // Extract number from SUB-CPMK.X (e.g., "1" from "SUB-CPMK.1")
-        String subCpmkCode = subCpmk.kodeSubCPMK.trim();
-        String subCpmkNumber = subCpmkCode.replaceFirst(RegExp(r'SUB-CPMK\.'), '');
-        
-        print('[RPS Batch Import] Sub-CPMK: $subCpmkCode → Looking for CPMK.$subCpmkNumber');
-
-        // Find matching CPMK with same number
-        CPMK? matchedCpmk;
-        for (final cpmk in cpmkList) {
-          String cpmkCode = cpmk.kodeCPMK.trim();
-          if (cpmkCode == 'CPMK.$subCpmkNumber') {
-            matchedCpmk = cpmk;
-            break;
-          }
+      for (final rps in rpsDetails) {
+        // Get CPMK code dari first CPMK dalam RPS (semua minggu biasanya ke CPMK yang sama)
+        if (rps.cpmkIds == null || rps.cpmkIds!.isEmpty) {
+          print('   ⚠️ RPS minggu ${rps.mingguKe} tidak punya CPMK code');
+          continue;
         }
 
-        if (matchedCpmk != null && matchedCpmk.id != null) {
+        // Get Sub-CPMK IDs dari RPS
+        if (rps.subCpmkIds == null || rps.subCpmkIds!.isEmpty) {
+          print('   ⚠️ RPS minggu ${rps.mingguKe} tidak punya Sub-CPMK');
+          continue;
+        }
+
+        // Use first CPMK ID (assuming one CPMK per course)
+        final cpmkId = rps.cpmkIds!.first;
+        
+        // Create mapping untuk setiap Sub-CPMK di RPS ini
+        for (final subCpmkId in rps.subCpmkIds!) {
+          mappingsToCreate.add((subCpmkId: subCpmkId, cpmkId: cpmkId));
+        }
+      }
+
+      if (mappingsToCreate.isEmpty) {
+        print('[RPS Batch Import] ⚠️ No Sub-CPMK ↔ CPMK pairs found in RPS data');
+        return;
+      }
+
+      print('[RPS Batch Import] Found ${mappingsToCreate.length} Sub-CPMK → CPMK mapping(s) to create');
+
+      // Create mappings
+      int created = 0;
+      int skipped = 0;
+      
+      for (final pair in mappingsToCreate) {
+        try {
           // Check if mapping already exists
           final existingMapping = await _dbHelper.getSubCPMKCPMKMappingSingle(
-            subCpmk.id!,
-            matchedCpmk.id!,
+            pair.subCpmkId,
+            pair.cpmkId,
           );
 
           if (existingMapping == null) {
-            // Create mapping with 100% bobot
             final now = DateTime.now();
             final mapping = SubCPMKCPMKMapping(
-              subCpmkId: subCpmk.id!,
-              cpmkId: matchedCpmk.id!,
+              subCpmkId: pair.subCpmkId,
+              cpmkId: pair.cpmkId,
               bobot: 100.0,
               createdAt: now,
               updatedAt: now,
             );
             
             await _dbHelper.insertSubCPMKCPMKMapping(mapping);
-
-            print('[RPS Batch Import] ✓ Mapped ${subCpmk.kodeSubCPMK} → ${matchedCpmk.kodeCPMK}');
+            created++;
+            print('[RPS Batch Import]   ✓ Created Sub-CPMK.$pair.subCpmkId → CPMK.$pair.cpmkId');
           } else {
-            print('[RPS Batch Import] Mapping already exists: ${subCpmk.kodeSubCPMK} → ${matchedCpmk.kodeCPMK}');
+            skipped++;
           }
-        } else {
-          print('[RPS Batch Import] ⚠ No matching CPMK.$subCpmkNumber found for ${subCpmk.kodeSubCPMK}');
+        } catch (e) {
+          print('[RPS Batch Import]   ❌ Error creating mapping Sub-CPMK.${pair.subCpmkId} → CPMK.${pair.cpmkId}: $e');
         }
       }
 
-      print('[RPS Batch Import] Sub-CPMK → CPMK mapping creation completed');
+      print('[RPS Batch Import] Sub-CPMK → CPMK mapping completed: $created created, $skipped already exist');
     } catch (e) {
       print('[RPS Batch Import] Error creating Sub-CPMK → CPMK mappings: $e');
       // Don't rethrow - allow import to continue even if mapping fails
