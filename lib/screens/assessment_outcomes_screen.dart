@@ -39,6 +39,10 @@ class _AssessmentOutcomesScreenState extends State<AssessmentOutcomesScreen>
   List<Map<String, dynamic>> _cpmkDetailList = [];
   // Detail CPL per mata kuliah: list of {mkId, mkKode, mkNama, cplId, cplDeskripsi, nilai}
   List<Map<String, dynamic>> _cplDetailList = [];
+  // Summary CPMK grouped by CPMK ID: list of {no, cpmkId, cpmkKode, nilaiRataRata, status}
+  List<Map<String, dynamic>> _cpmkSummaryList = [];
+  // Summary CPL grouped by CPL ID: list of {no, cplId, cplKode, nilaiRataRata, status}
+  List<Map<String, dynamic>> _cplSummaryList = [];
   bool _isLoading = false;
 
   @override
@@ -146,6 +150,8 @@ class _AssessmentOutcomesScreenState extends State<AssessmentOutcomesScreen>
       _cplScores = {};
       _cpmkDetailList = [];
       _cplDetailList = [];
+      _cpmkSummaryList = [];
+      _cplSummaryList = [];
     });
   }
 
@@ -222,6 +228,8 @@ class _AssessmentOutcomesScreenState extends State<AssessmentOutcomesScreen>
           _cplScores = {};
           _cpmkDetailList = [];
           _cplDetailList = [];
+          _cpmkSummaryList = [];
+          _cplSummaryList = [];
           _isLoading = false;
         });
       }
@@ -248,6 +256,8 @@ class _AssessmentOutcomesScreenState extends State<AssessmentOutcomesScreen>
           _cplScores = {};
           _cpmkDetailList = cpmkDetailList;
           _cplDetailList = cplDetailList;
+          _cpmkSummaryList = [];
+          _cplSummaryList = [];
           _isLoading = false;
         });
         return;
@@ -350,10 +360,13 @@ class _AssessmentOutcomesScreenState extends State<AssessmentOutcomesScreen>
           
           // Process CPMK values
           final cpmkValues = mahasiswaResult.cpmkValues;
+          print('🔹 MK $matakuliahId: Processing ${cpmkValues.length} CPMK values');
           for (final entry in cpmkValues.entries) {
             final cpmkId = int.tryParse(entry.key) ?? 0;
             if (cpmkId == 0) continue;
             final nilaiCpmk = entry.value;
+            
+            print('   Adding CPMK detail: cpmkId=$cpmkId, nilai=$nilaiCpmk');
             
             // 🎯 FIX BUG #3: Proper accumulation instead of incorrect averaging
             if (!cpmkAccumulation.containsKey(cpmkId)) {
@@ -388,10 +401,13 @@ class _AssessmentOutcomesScreenState extends State<AssessmentOutcomesScreen>
           
           // Process CPL values
           final cplValues = mahasiswaResult.cplValues;
+          print('🔹 MK $matakuliahId: Processing ${cplValues.length} CPL values');
           for (final entry in cplValues.entries) {
             final cplId = int.tryParse(entry.key) ?? 0;
             if (cplId == 0) continue;
             final nilaiCpl = entry.value;
+            
+            print('   Adding CPL detail: cplId=$cplId, nilai=$nilaiCpl');
             
             // 🎯 FIX BUG #3: Proper accumulation instead of incorrect averaging
             if (!cplAccumulation.containsKey(cplId)) {
@@ -454,11 +470,28 @@ class _AssessmentOutcomesScreenState extends State<AssessmentOutcomesScreen>
       print('   - CPMK detail rows: ${cpmkDetailList.length}');
       print('   - CPL detail rows: ${cplDetailList.length}');
       
+      // Sort detail lists by ID before calculating summary
+      cpmkDetailList.sort((a, b) => (a['cpmkId'] as int).compareTo(b['cpmkId'] as int));
+      cplDetailList.sort((a, b) => (a['cplId'] as int).compareTo(b['cplId'] as int));
+      
+      // Calculate summaries from detail lists
+      final cpmkSummary = _calculateCPMKSummary(cpmkDetailList);
+      final cplSummary = _calculateCPLSummary(cplDetailList);
+      
+      print('📊 Summary Calculation Results:');
+      print('   - CPMK Summary rows: ${cpmkSummary.length}');
+      print('   - CPL Summary rows: ${cplSummary.length}');
+      if (cpmkSummary.isNotEmpty) {
+        print('   - First CPMK Summary: ${cpmkSummary.first}');
+      }
+      
       setState(() {
         _cpmkScores = cpmkScores;
         _cplScores = cplScores;
         _cpmkDetailList = cpmkDetailList;
         _cplDetailList = cplDetailList;
+        _cpmkSummaryList = cpmkSummary;
+        _cplSummaryList = cplSummary;
         _isLoading = false;
       });
       
@@ -536,7 +569,7 @@ class _AssessmentOutcomesScreenState extends State<AssessmentOutcomesScreen>
     final dataRows = List<TableRow>.generate(rows.length, (rowIndex) {
       final row = rows[rowIndex];
       final statusValue = statusValues[rowIndex];
-      final isSuccess = statusValue != null && statusValue >= 2.0;
+      final isSuccess = statusValue != null && statusValue >= 60;
 
       final dataCells = List<TableCell>.generate(row.length, (colIndex) {
         final cellText = row[colIndex];
@@ -555,7 +588,7 @@ class _AssessmentOutcomesScreenState extends State<AssessmentOutcomesScreen>
                       borderRadius: BorderRadius.circular(4),
                     ),
                     child: Text(
-                      cellText,
+                      isSuccess ? 'Tercapai' : 'Tidak Tercapai',
                       style: const TextStyle(
                         color: Colors.white,
                         fontSize: 10,
@@ -878,11 +911,50 @@ class _AssessmentOutcomesScreenState extends State<AssessmentOutcomesScreen>
           ),
         ),
         Expanded(
-          child: Center(
-            child: SingleChildScrollView(
-              child: Padding(
-                padding: const EdgeInsets.all(AppSpacing.md),
-                child: _buildCPMKDetailTable(),
+          child: SingleChildScrollView(
+            child: SizedBox(
+              width: double.infinity,
+              child: Column(
+                children: [
+                  // Summary Table
+                  Padding(
+                    padding: const EdgeInsets.all(AppSpacing.md),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Ringkasan CPMK (Nilai Rata-Rata per CPMK)',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.blue[700],
+                          ),
+                        ),
+                        const SizedBox(height: AppSpacing.sm),
+                        _buildCPMKSummaryTable(),
+                      ],
+                    ),
+                  ),
+                  // Detail Table
+                  Padding(
+                    padding: const EdgeInsets.all(AppSpacing.md),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Detail CPMK (Per Mata Kuliah)',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.blue[700],
+                          ),
+                        ),
+                        const SizedBox(height: AppSpacing.sm),
+                        _buildCPMKDetailTable(),
+                      ],
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -911,11 +983,50 @@ class _AssessmentOutcomesScreenState extends State<AssessmentOutcomesScreen>
           ),
         ),
         Expanded(
-          child: Center(
-            child: SingleChildScrollView(
-              child: Padding(
-                padding: const EdgeInsets.all(AppSpacing.md),
-                child: _buildCPLDetailTable(),
+          child: SingleChildScrollView(
+            child: SizedBox(
+              width: double.infinity,
+              child: Column(
+                children: [
+                  // Summary Table
+                  Padding(
+                    padding: const EdgeInsets.all(AppSpacing.md),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Ringkasan CPL (Nilai Rata-Rata per CPL)',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.blue[700],
+                          ),
+                        ),
+                        const SizedBox(height: AppSpacing.sm),
+                        _buildCPLSummaryTable(),
+                      ],
+                    ),
+                  ),
+                  // Detail Table
+                  Padding(
+                    padding: const EdgeInsets.all(AppSpacing.md),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Detail CPL (Per Mata Kuliah)',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.blue[700],
+                          ),
+                        ),
+                        const SizedBox(height: AppSpacing.sm),
+                        _buildCPLDetailTable(),
+                      ],
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -1108,6 +1219,130 @@ class _AssessmentOutcomesScreenState extends State<AssessmentOutcomesScreen>
     );
   }
 
+  /// Calculate summary of CPMK grouped by CPMK ID
+  /// Menghitung nilai rata-rata untuk setiap CPMK yang muncul di beberapa mata kuliah
+  List<Map<String, dynamic>> _calculateCPMKSummary(
+      List<Map<String, dynamic>> detailList) {
+    print('🔍 _calculateCPMKSummary called with ${detailList.length} detail items');
+    
+    if (detailList.isEmpty) {
+      print('⚠️ Detail list kosong, returning empty summary');
+      return [];
+    }
+
+    // Extract unique CPMK IDs and sort them
+    final Set<int> cpmkIds = {};
+    final Map<int, String> cpmkKodeMap = {};
+    
+    for (final item in detailList) {
+      final cpmkId = item['cpmkId'] as int?;
+      final cpmkKode = item['cpmkKode'] as String?;
+      if (cpmkId != null) {
+        cpmkIds.add(cpmkId);
+        cpmkKodeMap[cpmkId] = cpmkKode ?? '-';
+      }
+    }
+    
+    final sortedIds = cpmkIds.toList()..sort();
+    print('  Sorted CPMK IDs: $sortedIds');
+
+    // Calculate summary for each CPMK ID in sorted order
+    final resultList = <Map<String, dynamic>>[];
+    int no = 1;
+    
+    for (final cpmkId in sortedIds) {
+      // Find all items for this CPMK ID
+      final itemsForId = detailList.where((item) => item['cpmkId'] == cpmkId).toList();
+      
+      double sum = 0.0;
+      for (final item in itemsForId) {
+        final nilai = (item['nilai'] as num?)?.toDouble() ?? 0.0;
+        sum += nilai;
+      }
+      
+      final count = itemsForId.length;
+      final average = count > 0 ? sum / count : 0.0;
+      final status = average >= 60 ? 'Tercapai' : 'Tidak Tercapai';
+
+      print('  Summary entry $no: cpmkId=$cpmkId, average=$average, status=$status');
+
+      resultList.add({
+        'no': no,
+        'cpmkId': cpmkId,
+        'cpmkKode': cpmkKodeMap[cpmkId] ?? '-',
+        'nilaiRataRata': average,
+        'status': status,
+      });
+
+      no++;
+    }
+
+    print('✅ CPMK Summary finished with ${resultList.length} items');
+    return resultList;
+  }
+
+  /// Calculate summary of CPL grouped by CPL ID
+  /// Menghitung nilai rata-rata untuk setiap CPL yang muncul di beberapa mata kuliah
+  List<Map<String, dynamic>> _calculateCPLSummary(
+      List<Map<String, dynamic>> detailList) {
+    print('🔍 _calculateCPLSummary called with ${detailList.length} detail items');
+    
+    if (detailList.isEmpty) {
+      print('⚠️ Detail list kosong, returning empty summary');
+      return [];
+    }
+
+    // Extract unique CPL IDs and sort them
+    final Set<int> cplIds = {};
+    final Map<int, String> cplKodeMap = {};
+    
+    for (final item in detailList) {
+      final cplId = item['cplId'] as int?;
+      final cplKode = item['cplKode'] as String?;
+      if (cplId != null) {
+        cplIds.add(cplId);
+        cplKodeMap[cplId] = cplKode ?? '-';
+      }
+    }
+    
+    final sortedIds = cplIds.toList()..sort();
+    print('  Sorted CPL IDs: $sortedIds');
+
+    // Calculate summary for each CPL ID in sorted order
+    final resultList = <Map<String, dynamic>>[];
+    int no = 1;
+    
+    for (final cplId in sortedIds) {
+      // Find all items for this CPL ID
+      final itemsForId = detailList.where((item) => item['cplId'] == cplId).toList();
+      
+      double sum = 0.0;
+      for (final item in itemsForId) {
+        final nilai = (item['nilai'] as num?)?.toDouble() ?? 0.0;
+        sum += nilai;
+      }
+      
+      final count = itemsForId.length;
+      final average = count > 0 ? sum / count : 0.0;
+      final status = average >= 60 ? 'Tercapai' : 'Tidak Tercapai';
+
+      print('  Summary entry $no: cplId=$cplId, average=$average, status=$status');
+
+      resultList.add({
+        'no': no,
+        'cplId': cplId,
+        'cplKode': cplKodeMap[cplId] ?? '-',
+        'nilaiRataRata': average,
+        'status': status,
+      });
+
+      no++;
+    }
+
+    print('✅ CPL Summary finished with ${resultList.length} items');
+    return resultList;
+  }
+
   Widget _buildCPMKDetailTable() {
     if (_cpmkDetailList.isEmpty) {
       return Padding(
@@ -1126,7 +1361,7 @@ class _AssessmentOutcomesScreenState extends State<AssessmentOutcomesScreen>
     // Build tabel sederhana: satu baris per mk-cpmk combination
     final rows = _cpmkDetailList.map((item) {
       final nilai = (item['nilai'] as num? ?? 0.0).toDouble();
-      final status = nilai >= 2.0 ? 'Tercapai' : 'Tidak Tercapai';
+      final status = nilai >= 60 ? 'Tercapai' : 'Tidak Tercapai';
       
       return [
         item['mkKode']?.toString() ?? '-',
@@ -1164,7 +1399,7 @@ class _AssessmentOutcomesScreenState extends State<AssessmentOutcomesScreen>
     // Build tabel sederhana: satu baris per mk-cpl combination
     final rows = _cplDetailList.map((item) {
       final nilai = (item['nilai'] as num? ?? 0.0).toDouble();
-      final status = nilai >= 2.0 ? 'Tercapai' : 'Tidak Tercapai';
+      final status = nilai >= 60 ? 'Tercapai' : 'Tidak Tercapai';
       
       return [
         item['mkKode']?.toString() ?? '-',
@@ -1181,6 +1416,74 @@ class _AssessmentOutcomesScreenState extends State<AssessmentOutcomesScreen>
       rows: rows,
       columnWidths: const [120, 200, 100, 100, 350, 120],
       statusValues: _cplDetailList.map((item) => (item['nilai'] as num?)?.toDouble()).toList(),
+    );
+  }
+
+  Widget _buildCPMKSummaryTable() {
+    if (_cpmkSummaryList.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.all(AppSpacing.lg),
+        child: Center(
+          child: Text(
+            'Tidak ada data ringkasan CPMK',
+            style: TextStyle(color: Colors.grey[600], fontSize: 14),
+          ),
+        ),
+      );
+    }
+
+    print('📋 CPMK Summary Table: ${_cpmkSummaryList.length} entries');
+
+    // Build summary tabel: satu baris per CPMK ID
+    final rows = _cpmkSummaryList.map((item) {
+      final nilai = (item['nilaiRataRata'] as num?)?.toDouble() ?? 0.0;
+      
+      return [
+        item['cpmkKode']?.toString() ?? '-',
+        nilai.toStringAsFixed(2),
+        item['status']?.toString() ?? '-',
+      ];
+    }).toList();
+
+    return _buildStyledDataTable(
+      headers: const ['CPMK Kode', 'Nilai Rata-Rata', 'Status'],
+      rows: rows,
+      columnWidths: const [150, 150, 120],
+      statusValues: _cpmkSummaryList.map((item) => (item['nilaiRataRata'] as num?)?.toDouble()).toList(),
+    );
+  }
+
+  Widget _buildCPLSummaryTable() {
+    if (_cplSummaryList.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.all(AppSpacing.lg),
+        child: Center(
+          child: Text(
+            'Tidak ada data ringkasan CPL',
+            style: TextStyle(color: Colors.grey[600], fontSize: 14),
+          ),
+        ),
+      );
+    }
+
+    print('📋 CPL Summary Table: ${_cplSummaryList.length} entries');
+
+    // Build summary tabel: satu baris per CPL ID
+    final rows = _cplSummaryList.map((item) {
+      final nilai = (item['nilaiRataRata'] as num?)?.toDouble() ?? 0.0;
+      
+      return [
+        item['cplKode']?.toString() ?? '-',
+        nilai.toStringAsFixed(2),
+        item['status']?.toString() ?? '-',
+      ];
+    }).toList();
+
+    return _buildStyledDataTable(
+      headers: const ['CPL Kode', 'Nilai Rata-Rata', 'Status'],
+      rows: rows,
+      columnWidths: const [150, 150, 120],
+      statusValues: _cplSummaryList.map((item) => (item['nilaiRataRata'] as num?)?.toDouble()).toList(),
     );
   }
 

@@ -12,6 +12,7 @@ import '../services/obe_calculation_helper.dart';
 import './cpmk_master_screen.dart';
 import './excel_import_screen.dart';
 import './nilai_batch_import_screen.dart';
+import './cpl_cpmk_export_screen.dart';
 
 enum AdminMenuType {
   home,
@@ -1905,9 +1906,13 @@ class _EmbeddedHitungCPLContentState extends State<_EmbeddedHitungCPLContent>
       // 🎯 PERMANENT: Simpan hasil perhitungan ke database (bukan hanya flag)
       // Try-catch untuk handle jika table tidak exist (database migration issue)
       try {
+        print('💾 Attempting to save ${results.length} calculation results to database...');
         await _dbHelper.saveCPLCalculationResults(results);
+        print('✅ Successfully saved calculation results to cpl_hasil_perhitungan');
       } catch (saveError) {
-        print('⚠️ Warning: Tidak bisa simpan hasil ke database: $saveError');
+        print('❌ CRITICAL ERROR: Tidak bisa simpan hasil ke database!');
+        print('❌ Error detail: $saveError');
+        print('❌ Stack trace: ${StackTrace.current}');
         print('⚠️ Hasil perhitungan masih ditampilkan, tapi tidak persisten');
         // Continue - jangan block UI hanya karena save gagal
       }
@@ -2859,15 +2864,24 @@ class _EmbeddedHitungCPLContentState extends State<_EmbeddedHitungCPLContent>
           }
         }
 
-        // Extract unique CPMK dan CPL IDs
+        // Extract unique Sub-CPMK, CPMK dan CPL IDs
+        final subCpmkIds = <int>{};
         final cpmkIds = <int>{};
         final cplIds = <int>{};
         for (final result in results) {
+          subCpmkIds.addAll(result.subCPMKValues.keys);
           cpmkIds.addAll(result.cPMKValues.keys);
           cplIds.addAll(result.cPLValues.keys);
         }
+        final sortedSubCpmkIds = subCpmkIds.toList()..sort();
         final sortedCpmkIds = cpmkIds.toList()..sort();
         final sortedCplIds = cplIds.toList()..sort();
+        
+        // Create mapping dari Sub-CPMK ID ke index (1-based)
+        final subCpmkIndexMap = <int, int>{};
+        for (int i = 0; i < sortedSubCpmkIds.length; i++) {
+          subCpmkIndexMap[sortedSubCpmkIds[i]] = i + 1;
+        }
 
         // Build columns
         final columns = <DataColumn>[
@@ -2892,17 +2906,36 @@ class _EmbeddedHitungCPLContentState extends State<_EmbeddedHitungCPLContent>
           ),
         ];
 
+        // Add Sub-CPMK columns (using 1-based index)
+        for (final subCpmkId in sortedSubCpmkIds) {
+          final index = subCpmkIndexMap[subCpmkId] ?? 0;
+          columns.add(
+            DataColumn(
+              label: SizedBox(
+                width: 65,
+                child: Center(
+                  child: Text(
+                    'Sub.${index}',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Color(0xFF3498DB)),
+                  ),
+                ),
+              ),
+            ),
+          );
+        }
+
         // Add CPMK columns
         for (final cpmkId in sortedCpmkIds) {
           columns.add(
             DataColumn(
               label: SizedBox(
-                width: 90,
+                width: 75,
                 child: Center(
                   child: Text(
-                    'CPMK.$cpmkId',
+                    'CPMK${cpmkId}',
                     textAlign: TextAlign.center,
-                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF27AE60)),
+                    style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Color(0xFF27AE60)),
                   ),
                 ),
               ),
@@ -2915,12 +2948,12 @@ class _EmbeddedHitungCPLContentState extends State<_EmbeddedHitungCPLContent>
           columns.add(
             DataColumn(
               label: SizedBox(
-                width: 90,
+                width: 75,
                 child: Center(
                   child: Text(
-                    'CPL.$cplId',
+                    'CPL$cplId',
                     textAlign: TextAlign.center,
-                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF8E44AD)),
+                    style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Color(0xFF8E44AD)),
                   ),
                 ),
               ),
@@ -2964,18 +2997,41 @@ class _EmbeddedHitungCPLContentState extends State<_EmbeddedHitungCPLContent>
               ),
             ];
 
+            // Add Sub-CPMK values
+            for (final subCpmkId in sortedSubCpmkIds) {
+              final value = result.subCPMKValues[subCpmkId];  // ← Use legacy getter subCPMKValues
+              cells.add(
+                DataCell(
+                  SizedBox(
+                    width: 65,
+                    child: Center(
+                      child: Text(
+                        value != null ? value.toStringAsFixed(2) : '-',
+                        style: const TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF3498DB),
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            }
+
             // Add CPMK values
             for (final cpmkId in sortedCpmkIds) {
               final value = result.cPMKValues[cpmkId];  // ← Use legacy getter cPMKValues
               cells.add(
                 DataCell(
                   SizedBox(
-                    width: 90,
+                    width: 75,
                     child: Center(
                       child: Text(
                         value != null ? value.toStringAsFixed(2) : '-',
                         style: const TextStyle(
-                          fontSize: 11,
+                          fontSize: 10,
                           fontWeight: FontWeight.w600,
                           color: Color(0xFF27AE60),
                         ),
@@ -2993,12 +3049,12 @@ class _EmbeddedHitungCPLContentState extends State<_EmbeddedHitungCPLContent>
               cells.add(
                 DataCell(
                   SizedBox(
-                    width: 90,
+                    width: 75,
                     child: Center(
                       child: Text(
                         value != null ? value.toStringAsFixed(2) : '-',
                         style: const TextStyle(
-                          fontSize: 11,
+                          fontSize: 10,
                           fontWeight: FontWeight.w600,
                           color: Color(0xFF8E44AD),
                         ),
@@ -3029,6 +3085,7 @@ class _EmbeddedHitungCPLContentState extends State<_EmbeddedHitungCPLContent>
 
         // Hitung total width yang dibutuhkan
         final totalWidth = (280.0) + // No, NIM, Nama columns
+            (sortedSubCpmkIds.length * 80.0) + // Sub-CPMK columns
             (sortedCpmkIds.length * 90.0) + // CPMK columns
             (sortedCplIds.length * 90.0) + // CPL columns
             20; // padding
@@ -3511,6 +3568,22 @@ class _EmbeddedExportContent extends StatelessWidget {
                     context,
                     MaterialPageRoute(
                       builder: (context) => _RPSExportScreen(
+                        dbHelper: DatabaseHelper(),
+                      ),
+                    ),
+                  );
+                },
+              ),
+              _buildExportCard(
+                icon: Icons.assessment,
+                label: 'Export CPL & CPMK',
+                subtitle: 'Laporan nilai CPL dan CPMK per mata kuliah',
+                color: const Color(0xFF8E44AD),
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => CPLCPMKExportScreen(
                         dbHelper: DatabaseHelper(),
                       ),
                     ),

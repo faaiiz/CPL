@@ -136,6 +136,7 @@ class OBECalculationHelper {
   Map<String, double> calculateSubCPMKValues({
     required Map<String, double> nilaiKomponen,
     required Map<String, Map<String, double>> subCpmkBobotMap,
+    bool printDebug = false,
   }) {
     final result = <String, double>{};
 
@@ -178,6 +179,7 @@ class OBECalculationHelper {
       // Hitung nilai Sub-CPMK menggunakan formula:
       // Sub-CPMK = Σ(nilai_komponen × bobot) / total_bobot
       double nilaiSub = 0.0;
+      final formulaParts = <String>[];
 
       activeBobots.forEach((komponenNama, bobot) {
         // ✅ Validasi: Nilai komponen HARUS ADA (tidak boleh missing)
@@ -186,13 +188,23 @@ class OBECalculationHelper {
 
         // Hitung kontribusi weighted (bobot digunakan langsung)
         nilaiSub += nilaiKomp * bobot;
+        formulaParts.add('${nilaiKomp.toStringAsFixed(1)}×${bobot.toStringAsFixed(1)}');
       });
 
       // Bagi dengan total bobot untuk mendapatkan nilai akhir
       final nilaiSubCpmk = nilaiSub / totalBobot;
+      final nilaiSubCpmkRounded = _roundToTwoDecimals(nilaiSubCpmk);
+
+      // Debug output jika diminta
+      if (printDebug) {
+        print('   $subCpmkId:');
+        print('      = (${formulaParts.join(' + ')}) / ${totalBobot.toStringAsFixed(1)}');
+        print('      = ${nilaiSub.toStringAsFixed(2)} / ${totalBobot.toStringAsFixed(1)}');
+        print('      = ${nilaiSubCpmkRounded.toStringAsFixed(2)}');
+      }
 
       // Roundup ke 2 desimal
-      result[subCpmkId] = _roundToTwoDecimals(nilaiSubCpmk);
+      result[subCpmkId] = nilaiSubCpmkRounded;
     });
 
     return result;
@@ -225,6 +237,7 @@ class OBECalculationHelper {
   Map<String, double> calculateCPMKValues({
     required Map<String, double> subCpmkValues,
     required Map<String, Map<String, double>> cpmkSubCpmkMap,
+    bool printDebug = false,
   }) {
     final result = <String, double>{};
 
@@ -240,6 +253,7 @@ class OBECalculationHelper {
       final context = 'CPMK "$cpmkId"';
       double totalWeighted = 0.0;
       double totalBobot = 0.0;
+      final formulaParts = <String>[];
 
       // Hitung weighted average
       subCpmkMap.forEach((subCpmkId, bobotTotal) {
@@ -258,6 +272,7 @@ class OBECalculationHelper {
         final nilaiSub = subCpmkValues[subCpmkId]!;
         totalWeighted += nilaiSub * bobotTotal;
         totalBobot += bobotTotal;
+        formulaParts.add('${nilaiSub.toStringAsFixed(2)}×${bobotTotal.toStringAsFixed(1)}');
       });
 
       // Validasi: Total bobot harus > 0
@@ -275,7 +290,17 @@ class OBECalculationHelper {
 
       // Hitung nilai CPMK
       final nilaiCpmk = totalWeighted / totalBobot;
-      result[cpmkId] = _roundToTwoDecimals(nilaiCpmk);
+      final nilaiCpmkRounded = _roundToTwoDecimals(nilaiCpmk);
+      
+      // Debug output jika diminta
+      if (printDebug) {
+        print('   $cpmkId:');
+        print('      = ((${formulaParts.join(') + (')}) / ${totalBobot.toStringAsFixed(1)}');
+        print('      = ${totalWeighted.toStringAsFixed(2)} / ${totalBobot.toStringAsFixed(1)}');
+        print('      = ${nilaiCpmkRounded.toStringAsFixed(2)}');
+      }
+
+      result[cpmkId] = nilaiCpmkRounded;
     });
 
     return result;
@@ -302,6 +327,7 @@ class OBECalculationHelper {
     required Map<String, double> cpmkValues,
     required Map<String, Map<String, double>> cplCpmkMap,
     bool useEqualWeightFallback = true,
+    bool printDebug = false,
   }) {
     final result = <String, double>{};
 
@@ -309,11 +335,16 @@ class OBECalculationHelper {
       return result; // CPL is optional
     }
 
+    if (printDebug) {
+      print('\n📊 CALCULATING CPL VALUES:');
+    }
+
     cplCpmkMap.forEach((cplId, cpmkWeightMap) {
       final context = 'CPL "$cplId"';
       double totalWeighted = 0.0;
       double totalBobot = 0.0;
       int validCpmkCount = 0;
+      final formulaParts = <String>[];
 
       // ✅ IMPROVED: Hitung weighted average dari CPMK
       cpmkWeightMap.forEach((cpmkId, bobot) {
@@ -326,6 +357,7 @@ class OBECalculationHelper {
           totalWeighted += nilaiCpmk * bobot;
           totalBobot += bobot;
           validCpmkCount++;
+          formulaParts.add('${nilaiCpmk.toStringAsFixed(2)}×${bobot.toStringAsFixed(1)}');
         }
       });
 
@@ -343,6 +375,11 @@ class OBECalculationHelper {
           final nilaiCpl = totalWeighted / validCpmkCount;
           result[cplId] = _roundToTwoDecimals(nilaiCpl);
 
+          if (printDebug) {
+            print('   $cplId (fallback equal weight):');
+            print('      = ${nilaiCpl.toStringAsFixed(2)}');
+          }
+
           if (_validationConfig.warnOnFallback) {
             print('⚠️ $context: Menggunakan equal weight fallback (bobot tidak tersedia di database)');
           }
@@ -351,6 +388,13 @@ class OBECalculationHelper {
         // Weighted average
         final nilaiCpl = totalWeighted / totalBobot;
         result[cplId] = _roundToTwoDecimals(nilaiCpl);
+
+        if (printDebug) {
+          print('   $cplId:');
+          print('      = ((${formulaParts.join(') + (')}) / ${totalBobot.toStringAsFixed(1)}');
+          print('      = ${totalWeighted.toStringAsFixed(2)} / ${totalBobot.toStringAsFixed(1)}');
+          print('      = ${nilaiCpl.toStringAsFixed(2)}');
+        }
 
         // ✅ Validasi total bobot
         if (_validationConfig.strictWeightValidation) {
@@ -396,18 +440,21 @@ class OBECalculationHelper {
     required Map<String, Map<String, double>> subCpmkBobotMap,
     required Map<String, Map<String, double>> cpmkSubCpmkMap,
     Map<String, Map<String, double>>? cplCpmkMap,
+    bool printDebug = false,
   }) {
     try {
       // STEP 1: Hitung Sub-CPMK
       final subCpmkValues = calculateSubCPMKValues(
         nilaiKomponen: nilaiKomponen,
         subCpmkBobotMap: subCpmkBobotMap,
+        printDebug: printDebug,
       );
 
       // STEP 2: Hitung CPMK
       final cpmkValues = calculateCPMKValues(
         subCpmkValues: subCpmkValues,
         cpmkSubCpmkMap: cpmkSubCpmkMap,
+        printDebug: printDebug,
       );
 
       // STEP 3: Hitung CPL (optional) - now uses weighted aggregation
@@ -415,6 +462,7 @@ class OBECalculationHelper {
           ? calculateCPLValues(
               cpmkValues: cpmkValues,
               cplCpmkMap: cplCpmkMap,
+              printDebug: printDebug,
             )
           : <String, double>{};
 
@@ -794,20 +842,27 @@ class OBECalculationHelper {
             if (cplCpmkMap != null && cplCpmkMap.isNotEmpty) {
               print('\n🎓 CPL ← CPMK MAPPING:');
               cplCpmkMap.forEach((cplId, cpmkMap) {
-                print('   CPL $cplId:');
+                final totalBobot = cpmkMap.values.fold<double>(0, (a, b) => a + b);
+                print('   CPL $cplId (TOTAL = ${totalBobot.toStringAsFixed(1)}%):');
                 cpmkMap.forEach((cpmkId, bobot) {
-                  print('      - CPMK $cpmkId (bobot: ${bobot.toStringAsFixed(2)}%)');
+                  if (bobot > 0) {
+                    print('      - CPMK $cpmkId: ${bobot.toStringAsFixed(1)}%');
+                  }
                 });
               });
+            } else {
+              print('\n⚠️ CPL ← CPMK MAPPING: KOSONG (CPL tidak akan dihitung)');
+              print('   Pastikan table CPL dan mapping CPL←CPMK sudah ada di database');
             }
           }
 
-          // Calculate OBE
+          // Calculate OBE (enable detailed debug output for first mahasiswa)
           final calculationResult = calculateOBEComplete(
             nilaiKomponen: nilaiKomponen,
             subCpmkBobotMap: subCpmkBobotMap,
             cpmkSubCpmkMap: cpmkSubCpmkMap,
             cplCpmkMap: cplCpmkMap,
+            printDebug: isFirstMahasiswa,
           );
 
           if (calculationResult['status'] != 'success') {
@@ -887,6 +942,23 @@ class OBECalculationHelper {
         });
       }
 
+      print('=' * 60);
+      
+      // ✅ Display results table
+      print('\n📊 HASIL PERHITUNGAN OBE:');
+      print('Mahasiswa ID | Avg Sub-CPMK | Avg CPMK | Avg CPL');
+      print('-' * 60);
+      for (final result in results) {
+        final avgSubCpmk = result.averageSubCPMK;
+        final avgCpmk = result.averageCPMK;
+        final avgCpl = result.averageCPL;
+        print(
+          '${result.mahasiswaId.toString().padRight(12)} | '
+          '${avgSubCpmk.toStringAsFixed(2).padRight(13)} | '
+          '${avgCpmk.toStringAsFixed(2).padRight(9)} | '
+          '${avgCpl.toStringAsFixed(2)}',
+        );
+      }
       print('=' * 60);
       print('');
 
@@ -995,7 +1067,10 @@ class OBECalculationHelper {
 
       print('📌 Sub-CPMKs ditemukan: ${subCpmkIds.toList()}');
 
-      // ✅ AGGREGATE BOBOT DARI RPS DATA LANGSUNG
+      // ✅ AGGREGATE BOBOT DARI RPS DATA + rps_detail_sub_cpmk_bobot TABLE
+      // PENTING: Jangan gunakan rpsDetail.subCpmkIds untuk distribusi bobot yang sama
+      // Gunakan table rps_detail_sub_cpmk_bobot untuk bobot spesifik per Sub-CPMK
+      
       // Inisialisasi map untuk setiap Sub-CPMK dengan komponen kosong
       const komponenNames = [
         'aktivitas',
@@ -1014,49 +1089,123 @@ class OBECalculationHelper {
         result[subCpmkId.toString()] = bobotMap;
       }
 
-      // ✅ Baca bobot dari RPS dan agregasi per komponen
-      print('\n📊 Aggregating bobot dari RPS Details:');
+      // ✅ Baca bobot SPESIFIK dari rps_detail_sub_cpmk_bobot
+      print('\n📊 Aggregating bobot dari RPS Details + rps_detail_sub_cpmk_bobot:');
+      
+      // 🔍 DEBUG: Tampilkan semua jenis penilaian yang ada
+      print('\n   📋 JENIS PENILAIAN YANG DITEMUKAN:');
+      final jenisNilaiSet = <String>{};
+      for (final rpsDetail in rpsDetails) {
+        final jenisNilai = rpsDetail.jenisNilai?.toLowerCase().trim() ?? '';
+        if (jenisNilai.isNotEmpty) {
+          jenisNilaiSet.add(jenisNilai);
+        }
+      }
+      for (final jenis in jenisNilaiSet.toList()..sort()) {
+        print('      - "$jenis"');
+      }
+      
+      print('\n   📌 PROCESSING:');
       for (final rpsDetail in rpsDetails) {
         final mingguKe = rpsDetail.mingguKe;
         final jenisNilai = rpsDetail.jenisNilai?.toLowerCase().trim() ?? '';
-        final bobot = rpsDetail.bobot ?? 0.0;
-        final subCpmkIds_ = rpsDetail.subCpmkIds ?? [];
+        final rpsDetailId = rpsDetail.id;
 
-        if (jenisNilai.isEmpty || bobot == 0 || subCpmkIds_.isEmpty) {
+        if (jenisNilai.isEmpty) {
+          print('      ⚠️ Minggu $mingguKe: jenisNilai KOSONG - skipped');
+          continue;
+        }
+        
+        if (rpsDetailId == null) {
+          print('      ⚠️ Minggu $mingguKe ($jenisNilai): rpsDetailId NULL - skipped');
           continue;
         }
 
-        // Parse jenisNilai ke komponen index (flexible matching)
+        // Parse jenisNilai ke komponen name (flexible matching)
+        // 🔍 INFO: Parsing dengan case-insensitive dan trim whitespace
+        final jenisNilaiLower = jenisNilai.toLowerCase().trim();
         String? komponenName;
-        if (jenisNilai.contains('aktivitas') || jenisNilai.contains('activity')) {
+        
+        // ✅ Handle both correct spelling (aktivitas) and common misspelling (aktifitas)
+        if (jenisNilaiLower.contains('aktif')) {
           komponenName = 'aktivitas';
-        } else if (jenisNilai.contains('proyek') || jenisNilai.contains('project')) {
+        } else if (jenisNilaiLower.contains('proyek')) {
           komponenName = 'proyek';
-        } else if (jenisNilai.contains('kuis') || jenisNilai.contains('quiz')) {
+        } else if (jenisNilaiLower.contains('kuis')) {
           komponenName = 'kuis';
-        } else if (jenisNilai.contains('tugas') || jenisNilai.contains('assignment')) {
+        } else if (jenisNilaiLower.contains('tugas')) {
           komponenName = 'tugas';
-        } else if (jenisNilai.contains('uts') || jenisNilai.contains('midterm')) {
+        } else if (jenisNilaiLower.contains('uts')) {
           komponenName = 'uts';
-        } else if (jenisNilai.contains('uas') || jenisNilai.contains('final')) {
+        } else if (jenisNilaiLower.contains('uas')) {
           komponenName = 'uas';
         }
 
         if (komponenName == null) {
-          print(
-              '⚠️  Minggu $mingguKe: jenisNilai "$jenisNilai" tidak dikenal - skipped');
+          print('      ⚠️  Minggu $mingguKe: jenisNilai "$jenisNilai" tidak match ke komponen apapun - skipped');
           continue;
         }
+        
+        print('      ✅ Minggu $mingguKe: "$jenisNilai" → "$komponenName"');
 
-        // Tambahkan bobot ke setiap Sub-CPMK yang terlibat
-        for (final subCpmkId in subCpmkIds_) {
-          final subCpmkIdStr = subCpmkId.toString();
-          if (result.containsKey(subCpmkIdStr)) {
-            result[subCpmkIdStr]![komponenName] =
-                _roundToTwoDecimals(result[subCpmkIdStr]![komponenName]! + bobot);
+        // 🔑 PENTING: Baca bobot SPESIFIK per Sub-CPMK dari rps_detail_sub_cpmk_bobot
+        try {
+          final bobotPerSubCpmk = await _dbHelper.getRPSDetailSubCPMKBobot(rpsDetailId);
+          final bobotGeneric = rpsDetail.bobot ?? 0.0;
+          final subCpmkIdsFromRps = rpsDetail.subCpmkIds ?? [];
+          
+          if (bobotPerSubCpmk.isEmpty) {
+            // ⚠️ FALLBACK: Tidak ada di rps_detail_sub_cpmk_bobot, gunakan subCpmkIds
             print(
-                '   Minggu $mingguKe: Sub-CPMK $subCpmkIdStr += $bobot% untuk $komponenName');
+                '⚠️  Minggu $mingguKe ($jenisNilai, bobot=${bobotGeneric.toStringAsFixed(2)}%): Tidak ada data di rps_detail_sub_cpmk_bobot');
+            
+            if (subCpmkIdsFromRps.isNotEmpty) {
+              // Bagikan bobot ke Sub-CPMK yang disebutkan
+              final bobotPerSubCpmk_ = bobotGeneric / subCpmkIdsFromRps.length;
+              for (final subCpmkId in subCpmkIdsFromRps) {
+                final subCpmkIdStr = subCpmkId.toString();
+                if (result.containsKey(subCpmkIdStr)) {
+                  result[subCpmkIdStr]![komponenName] =
+                      _roundToTwoDecimals(result[subCpmkIdStr]![komponenName]! + bobotPerSubCpmk_);
+                  print(
+                      '   └─ Sub-CPMK $subCpmkIdStr += ${bobotPerSubCpmk_.toStringAsFixed(2)} untuk $komponenName [FALLBACK - divided by ${subCpmkIdsFromRps.length}]');
+                }
+              }
+            } else {
+              // Jika subCpmkIds kosong, bagikan ke SEMUA Sub-CPMK (berarti assessment ini untuk semua)
+              print('   ⚠️ subCpmkIds kosong - distribusi ke SEMUA Sub-CPMK');
+              final bobotPerSubCpmk_ = bobotGeneric / subCpmkIds.length;
+              for (final subCpmkId in subCpmkIds) {
+                final subCpmkIdStr = subCpmkId.toString();
+                result[subCpmkIdStr]![komponenName] =
+                    _roundToTwoDecimals(result[subCpmkIdStr]![komponenName]! + bobotPerSubCpmk_);
+                print(
+                    '   └─ Sub-CPMK $subCpmkIdStr += ${bobotPerSubCpmk_.toStringAsFixed(2)} untuk $komponenName [FALLBACK - all SubCPMK]');
+              }
+            }
+            continue;
           }
+
+          // ✅ Gunakan bobot SPESIFIK dari rps_detail_sub_cpmk_bobot
+          print('   ✅ Minggu $mingguKe ($jenisNilai): Found ${bobotPerSubCpmk.length} rows di rps_detail_sub_cpmk_bobot');
+          for (final bobotRow in bobotPerSubCpmk) {
+            final subCpmkId = bobotRow['sub_cpmk_id'];
+            final bobot = (bobotRow['bobot'] as num?)?.toDouble() ?? 0.0;
+            
+            if (bobot <= 0 || subCpmkId == null) {
+              continue;
+            }
+
+            final subCpmkIdStr = subCpmkId.toString();
+            if (result.containsKey(subCpmkIdStr)) {
+              result[subCpmkIdStr]![komponenName] =
+                  _roundToTwoDecimals(result[subCpmkIdStr]![komponenName]! + bobot);
+              print(
+                  '   └─ Sub-CPMK $subCpmkIdStr += ${bobot.toStringAsFixed(2)} untuk $komponenName');
+            }
+          }
+        } catch (e) {
+          print('⚠️  Error reading bobot for RPS Detail $rpsDetailId: $e');
         }
       }
 
@@ -1087,12 +1236,38 @@ class OBECalculationHelper {
         );
       }
 
+      // ✅ VERIFICATION: Cek apakah aktivitas partisipatif ada
+      bool hasAktivitas = false;
+      for (final entry in result.entries) {
+        if ((entry.value['aktivitas'] ?? 0.0) > 0) {
+          hasAktivitas = true;
+          break;
+        }
+      }
+      
+      if (!hasAktivitas) {
+        print('\n⚠️⚠️⚠️ WARNING: AKTIVITAS PARTISIPATIF TIDAK DITEMUKAN DALAM HASIL AGGREGASI!');
+        print('   Cek apakah di RPS:');
+        print('   1. Ada jenis penilaian "Aktivitas Partisipatif" atau variant-nya?');
+        print('   2. Bobot aktivitas partisipatif > 0?');
+        print('   3. Sub-CPMK yang terkait sudah di-assign?');
+        print('   4. Data di rps_detail_sub_cpmk_bobot ada untuk Sub-CPMK 276 & 282?');
+        print('\n   Jenis penilaian yang ADA: ${jenisNilaiSet.toList()}');
+      }
+
       print('\n✅ Sub-CPMK bobot map loaded dari RPS aggregation');
       for (final entry in result.entries) {
         final totalBobot =
             entry.value.values.fold<double>(0, (a, b) => a + b);
         _validateTotalWeights('Sub-CPMK ${entry.key}', totalBobot);
-        print('   Sub-CPMK ${entry.key}: ${entry.value}');
+        
+        // Tampilkan detail bobot per komponen
+        print('   Sub-CPMK ${entry.key}: (TOTAL = ${totalBobot.toStringAsFixed(1)})');
+        entry.value.forEach((komponen, bobot) {
+          if (bobot > 0) {
+            print('      - $komponen: ${bobot.toStringAsFixed(1)}');
+          }
+        });
       }
 
       return result;
@@ -1146,9 +1321,28 @@ class OBECalculationHelper {
           print('     - Bobot: ${rps.bobot ?? 0}%');
           
           if (rps.subCpmkIds != null && rps.subCpmkIds!.isNotEmpty) {
-            print('     - Sub-CPMK: ${rps.subCpmkIds!.join(', ')}');
+            print('     - Sub-CPMK (dari RPS): ${rps.subCpmkIds!.join(', ')}');
           } else {
-            print('     - Sub-CPMK: ❌ NONE');
+            print('     - Sub-CPMK: ❌ NONE (empty or null)');
+          }
+
+          // 🔍 TAMBAHAN: Cek bobot di rps_detail_sub_cpmk_bobot
+          if (rps.id != null) {
+            try {
+              final bobotPerSubCpmk = await _dbHelper.getRPSDetailSubCPMKBobot(rps.id!);
+              if (bobotPerSubCpmk.isNotEmpty) {
+                print('     - rps_detail_sub_cpmk_bobot: ✅ ${bobotPerSubCpmk.length} rows');
+                for (final bobotRow in bobotPerSubCpmk) {
+                  final subCpmkId = bobotRow['sub_cpmk_id'];
+                  final bobot = bobotRow['bobot'];
+                  print('        └─ Sub-CPMK $subCpmkId: bobot=$bobot');
+                }
+              } else {
+                print('     - rps_detail_sub_cpmk_bobot: ❌ NO DATA (fallback akan digunakan)');
+              }
+            } catch (e) {
+              print('     - rps_detail_sub_cpmk_bobot: ⚠️ ERROR - $e');
+            }
           }
 
           if (rps.cpmkIds != null && rps.cpmkIds!.isNotEmpty) {
@@ -1283,20 +1477,41 @@ class OBECalculationHelper {
       }
       print('   IDs: ${validSubCpmkIds.toList()}');
 
-      // Get semua mappings
+      // STEP 1: Load bobot komponen untuk setiap Sub-CPMK (dari RPS)
+      // ✅ PENTING: Bobot CPMK←SubCPMK harus sama dengan TOTAL bobot komponen di Sub-CPMK
+      final subCpmkBobotMap = await _getSubCpmkBobotMapFromDatabase(matakuliahId);
+      
+      // Calculate total bobot per Sub-CPMK (sum semua komponennya)
+      final subCpmkTotalBobot = <String, double>{};
+      for (final entry in subCpmkBobotMap.entries) {
+        final subCpmkId = entry.key;
+        final bobotPerComponent = entry.value;
+        final totalBobot = bobotPerComponent.values.fold<double>(0, (a, b) => a + b);
+        subCpmkTotalBobot[subCpmkId] = totalBobot;
+      }
+
+      print('📊 Sub-CPMK Total Bobot (sum semua komponen):');
+      for (final entry in subCpmkTotalBobot.entries) {
+        print('   Sub-CPMK ${entry.key}: ${entry.value.toStringAsFixed(1)}%');
+      }
+
+      // STEP 2: Get mapping CPMK←SubCPMK dari database
       final allMappings = await _dbHelper.getAllSubCPMKCPMKMappings();
       
       if (allMappings.isEmpty) {
         throw Exception('Sub-CPMK←CPMK mappings tidak ditemukan di database');
       }
 
-      print('📌 Mappings ditemukan: ${allMappings.length} records');
+      print('📌 CPMK←SubCPMK mappings ditemukan: ${allMappings.length} records');
 
-      // Build map dari data yang tersedia
+      // STEP 3: Build CPMK←SubCPMK map dengan bobot dari component totals
+      // ✅ RULES:
+      // - Jika bobot_mapping ada dan > 0: gunakan bobot_mapping
+      // - Jika bobot_mapping = 0 atau null: gunakan total_bobot dari komponen
       for (final mapping in allMappings) {
         final cpmkId = mapping['cpmk_id'].toString();
         final subCpmkId = mapping['sub_cpmk_id'].toString();
-        final bobot = (mapping['bobot'] as num?)?.toDouble() ?? 0.0;
+        final bobotMapping = (mapping['bobot'] as num?)?.toDouble() ?? 0.0;
 
         // Check apakah sub_cpmk ini ada di MK kita
         if (!validSubCpmkIds.contains(subCpmkId)) {
@@ -1307,12 +1522,22 @@ class OBECalculationHelper {
           result[cpmkId] = {};
         }
 
-        result[cpmkId]![subCpmkId] = bobot;
+        // ✅ GUNAKAN BOBOT DARI KOMPONEN, BUKAN DARI MAPPING TABLE
+        final finalBobot = subCpmkTotalBobot[subCpmkId] ?? bobotMapping;
+        result[cpmkId]![subCpmkId] = finalBobot;
       }
 
-      print('✅ CPMK←SubCPMK mapping created: ${result.length} CPMKs');
+      print('\n✅ CPMK←SubCPMK mapping created: ${result.length} CPMKs');
+      print('   (using component totals as bobot, not mapping table values)');
       for (final entry in result.entries) {
-        print('   CPMK ${entry.key}: ${entry.value}');
+        final totalBobot =
+            entry.value.values.fold<double>(0, (a, b) => a + b);
+        print('   CPMK ${entry.key}: (TOTAL = ${totalBobot.toStringAsFixed(1)}%)');
+        entry.value.forEach((subCpmkId, bobot) {
+          if (bobot > 0) {
+            print('      - Sub-CPMK $subCpmkId: ${bobot.toStringAsFixed(1)}%');
+          }
+        });
       }
 
       if (result.isEmpty) {
@@ -1326,75 +1551,213 @@ class OBECalculationHelper {
     }
   }
 
-  /// 🔧 Helper: Get CPL←CPMK mapping dari database
+  /// 🔧 Helper: Get CPL←CPMK mapping dari RPS Detail
   /// 
-  /// FORMAT OUTPUT: {"cpl1": {"cpmk1": 30, "cpmk2": 35, ...}, ...}
+  /// ✅ BUILD FROM RPS DATA (NOT database mapping table):
+  /// 1. Load RPS details dan CPL IDs
+  /// 2. Untuk setiap CPL: cari Sub-CPMK yang di-assign
+  /// 3. Agregasi Sub-CPMK bobot per CPMK → CPL←CPMK mapping
+  /// 4. Format: Map<cplId, Map<cpmkId, bobot>>
   /// 
-  /// DATA SOURCE: Table cpl_cpmk atau cpmk_cpl (weighted)
-  /// Expected schema:
-  ///   - cpl_id (int)
-  ///   - cpmk_id (int)
-  ///   - bobot (double): weight of CPMK in CPL aggregation
+  /// OUTPUT: {"2": {"4": 100.0}, ...}
+  Future<Map<String, Map<String, double>>> _getCPLCpmkMapFromRPS(
+    int matakuliahId,
+  ) async {
+    try {
+      final result = <String, Map<String, double>>{};
+
+      // STEP 1: Load RPS details
+      final rpsDetails = await _dbHelper.getRPSDetailByMatakuliah(matakuliahId);
+      if (rpsDetails.isEmpty) {
+        print('⚠️ RPS Detail kosong - CPL mapping tidak bisa dibuat');
+        return result;
+      }
+
+      // STEP 2: Load Sub-CPMK ← CPMK mapping dari database
+      final subCpmkToCpmk = <int, int>{}; // sub-cpmk ID → CPMK ID
+      try {
+        final cpmkSubCpmkMap = await _getCpmkSubCpmkMapFromDatabase(matakuliahId);
+        // Reverse map: Sub-CPMK → CPMK
+        for (final cpmkEntry in cpmkSubCpmkMap.entries) {
+          final cpmkId = int.tryParse(cpmkEntry.key) ?? 0;
+          for (final subCpmkId in cpmkEntry.value.keys) {
+            final subId = int.tryParse(subCpmkId) ?? 0;
+            if (cpmkId > 0 && subId > 0) {
+              subCpmkToCpmk[subId] = cpmkId;
+            }
+          }
+        }
+        print('   Sub-CPMK←CPMK mapping: ${subCpmkToCpmk.length} entries');
+      } catch (e) {
+        print('⚠️ Cannot load Sub-CPMK mapping: $e');
+        return result;
+      }
+
+      // STEP 3: Load Sub-CPMK bobot
+      final subCpmkBobotMap = await _getSubCpmkBobotMapFromDatabase(matakuliahId);
+      print('   Sub-CPMK bobot loaded for ${subCpmkBobotMap.length} Sub-CPMK');
+
+      // STEP 4: Build CPL←CPMK mapping dari RPS
+      print('\n📌 BUILDING CPL←CPMK FROM RPS:');
+      final cplCpmkBobot = <int, Map<String, double>>{}; // CPL → (CPMK → bobot)
+
+      for (final rpsDetail in rpsDetails) {
+        final cplIds = rpsDetail.cplIds ?? [];
+        final subCpmkIds = rpsDetail.subCpmkIds ?? [];
+
+        if (cplIds.isEmpty || subCpmkIds.isEmpty) {
+          continue;
+        }
+
+        // Untuk setiap CPL, aggregate Sub-CPMK bobot by CPMK
+        for (final cplId in cplIds) {
+          if (!cplCpmkBobot.containsKey(cplId)) {
+            cplCpmkBobot[cplId] = {};
+          }
+
+          // Aggregate Sub-CPMK dari minggu ini ke CPMK
+          for (final subCpmkId in subCpmkIds) {
+            final cpmkId = subCpmkToCpmk[subCpmkId];
+            if (cpmkId == null) {
+              continue;
+            }
+
+            // Get bobot Sub-CPMK
+            final subCpmkIdStr = subCpmkId.toString();
+            final subCpmkBobots = subCpmkBobotMap[subCpmkIdStr];
+            if (subCpmkBobots == null) {
+              continue;
+            }
+
+            // Sum bobot dari Sub-CPMK
+            final totalBobot = subCpmkBobots.values.fold<double>(0, (a, b) => a + b);
+
+            // Add to CPL←CPMK
+            final cpmkIdStr = cpmkId.toString();
+            cplCpmkBobot[cplId]![cpmkIdStr] =
+                (cplCpmkBobot[cplId]![cpmkIdStr] ?? 0.0) + totalBobot;
+          }
+        }
+      }
+
+      // STEP 5: Normalize bobot per CPL (scale to percentages if needed)
+      print('   Found ${cplCpmkBobot.length} CPL with CPMK assignments:');
+      
+      for (final cplEntry in cplCpmkBobot.entries) {
+        final cplIdStr = cplEntry.key.toString();
+        final cpmkBobots = cplEntry.value;
+        
+        if (cpmkBobots.isEmpty) {
+          continue;
+        }
+
+        double totalBobot = 0;
+        for (final bobot in cpmkBobots.values) {
+          totalBobot += bobot;
+        }
+
+        result[cplIdStr] = cpmkBobots;
+        print('      CPL $cplIdStr: ${cpmkBobots.length} CPMK, total bobot = ${totalBobot.toStringAsFixed(1)}');
+        for (final cpmkEntry in cpmkBobots.entries) {
+          print('         - CPMK ${cpmkEntry.key}: ${cpmkEntry.value.toStringAsFixed(1)}');
+        }
+      }
+
+      if (result.isEmpty) {
+        print('   ⚠️ Tidak ada CPL←CPMK mapping yang bisa dibuat dari RPS');
+      }
+
+      return result;
+    } catch (e) {
+      print('❌ Error building CPL←CPMK from RPS: $e');
+      return {};
+    }
+  }
+
+  /// 🔧 Helper: Get CPL←CPMK mapping dari database (dengan fallback ke RPS)
   /// 
-  /// RETURNS: Null atau empty map jika mapping tidak ada (CPL is optional)
+  /// PRIORITY:
+  /// 1. Coba load dari database mapping table (cpl_cpmk)
+  /// 2. Jika kosong, build dari RPS detail
   Future<Map<String, Map<String, double>>> _getCPLCpmkMapFromDatabase(
     int matakuliahId,
   ) async {
     try {
       final result = <String, Map<String, double>>{};
 
-      // Get mappings dari database - CPL is OPTIONAL
+      // STEP 1: Try load dari database mapping table (optional)
       List<Map<String, dynamic>>? allMappings;
       try {
-        allMappings =
-            await _dbHelper.getAllCPLCPMKMappings();
+        allMappings = await _dbHelper.getAllCPLCPMKMappings();
       } catch (e) {
-        // Method mungkin tidak tersedia di DatabaseHelper - okay, CPL is optional
-        print('⚠️ CPL←CPMK mappings tidak tersedia (optional): $e');
-        return result;
+        print('⚠️ Database CPL←CPMK mappings tidak tersedia (akan build dari RPS): $e');
+        allMappings = null;
       }
 
-      if (allMappings == null || allMappings.isEmpty) {
-        print('⚠️ CPL←CPMK mappings tidak ditemukan (optional - skipped)');
-        return result;
-      }
+      // STEP 2: If database has mappings, use them; otherwise build from RPS
+      if (allMappings != null && allMappings.isNotEmpty) {
+        print('📌 CPL←CPMK mappings ditemukan di database: ${allMappings.length} records');
 
-      print('📌 CPL←CPMK mappings ditemukan: ${allMappings.length} records');
-
-      // Get valid CPMK IDs untuk MK ini
-      final validCpmkIds = <String>{};
-      final cpmkSubCpmkMap = await _getCpmkSubCpmkMapFromDatabase(matakuliahId);
-      validCpmkIds.addAll(cpmkSubCpmkMap.keys);
-
-      // Build map dari mappings
-      for (final mapping in allMappings) {
-        final cplId = mapping['cpl_id'].toString();
-        final cpmkId = mapping['cpmk_id'].toString();
-        final bobot = (mapping['bobot'] as num?)?.toDouble() ?? 0.0;
-
-        // Check apakah CPMK ini ada di MK kita
-        if (!validCpmkIds.contains(cpmkId)) {
-          continue;
+        // Load CPMK bobot untuk validation
+        final cpmkSubCpmkMap = await _getCpmkSubCpmkMapFromDatabase(matakuliahId);
+        final cpmkTotalBobot = <String, double>{};
+        for (final entry in cpmkSubCpmkMap.entries) {
+          final cpmkId = entry.key;
+          final subCpmkWeights = entry.value;
+          final totalBobot = subCpmkWeights.values.fold<double>(0, (a, b) => a + b);
+          cpmkTotalBobot[cpmkId] = totalBobot;
         }
 
-        if (!result.containsKey(cplId)) {
-          result[cplId] = {};
+        final validCpmkIds = <String>{};
+        validCpmkIds.addAll(cpmkSubCpmkMap.keys);
+
+        print('\n📌 PROCESSING CPL←CPMK MAPPINGS:');
+        int mappingCount = 0;
+
+        for (final mapping in allMappings) {
+          final cplId = mapping['cpl_id'].toString();
+          final cpmkId = mapping['cpmk_id'].toString();
+          final bobotMapping = (mapping['bobot'] as num?)?.toDouble() ?? 0.0;
+
+          if (!validCpmkIds.contains(cpmkId)) {
+            print('   ⚠️ CPL $cplId ← CPMK $cpmkId: CPMK tidak ada di MK ini - skipped');
+            continue;
+          }
+
+          if (!result.containsKey(cplId)) {
+            result[cplId] = {};
+          }
+
+          final finalBobot = cpmkTotalBobot[cpmkId] ?? bobotMapping;
+          result[cplId]![cpmkId] = finalBobot;
+          mappingCount++;
+
+          if (bobotMapping > 0) {
+            print('   ✅ CPL $cplId ← CPMK $cpmkId: ${finalBobot.toStringAsFixed(1)}%');
+          } else {
+            print('   ✅ CPL $cplId ← CPMK $cpmkId: ${finalBobot.toStringAsFixed(1)}% (dari CPMK total)');
+          }
         }
 
-        result[cplId]![cpmkId] = bobot;
-      }
-
-      if (result.isNotEmpty) {
-        print('✅ CPL←CPMK mapping loaded: ${result.length} CPLs');
-        for (final entry in result.entries) {
-          print('   CPL ${entry.key}: ${entry.value}');
+        if (mappingCount > 0 && result.isNotEmpty) {
+          print('\n✅ CPL←CPMK mapping loaded dari database: ${result.length} CPLs');
+          return result;
         }
       }
 
-      return result;
+      // STEP 3: Build dari RPS jika database kosong
+      print('\n📌 Building CPL←CPMK mapping dari RPS Detail...');
+      return await _getCPLCpmkMapFromRPS(matakuliahId);
+
     } catch (e) {
-      print('⚠️ Warning getting CPL←CPMK mapping: $e');
-      return {}; // Return empty, CPL is optional
+      print('❌ Error getting CPL←CPMK mapping: $e');
+      print('💡 Fallback: trying to build dari RPS...');
+      try {
+        return await _getCPLCpmkMapFromRPS(matakuliahId);
+      } catch (fallbackError) {
+        print('❌ Fallback juga gagal: $fallbackError');
+        return {};
+      }
     }
   }
 }

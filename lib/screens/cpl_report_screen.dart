@@ -146,12 +146,12 @@ class _CPLReportScreenState extends State<CPLReportScreen> {
 
   String _getStatusLabel(double? score) {
     if (score == null) return 'N/A';
-    return score >= 2.0 ? 'Tercapai' : 'Tidak Tercapai';
+    return score >= 60 ? 'Tercapai' : 'Tidak Tercapai';
   }
 
   Color _getStatusColor(double? score) {
     if (score == null) return Colors.grey;
-    return score >= 2.0 ? Colors.green : Colors.red;
+    return score >= 60 ? Colors.green : Colors.red;
   }
 
   @override

@@ -1674,9 +1674,11 @@ class DatabaseHelper {
       for (final result in results) {
         // result adalah OBECalculationResult
         // Konversi Map ke String format untuk disimpan
+        // 🎯 FIX: Gunakan legacy getters (uppercase) yang return Map<int, double>
+        // result.subCPMKValues, result.cPMKValues, result.cPLValues
         final subCpmkValuesJson = _mapToJson(result.subCPMKValues);
-        final cpmkValuesJson = _mapToJson(result.cpmkValues);
-        final cplValuesJson = _mapToJson(result.cplValues);
+        final cpmkValuesJson = _mapToJson(result.cPMKValues);
+        final cplValuesJson = _mapToJson(result.cPLValues);
         final subCpmkBobotcsJson = result.subCpmkBobots != null 
             ? _mapToJson(result.subCpmkBobots!) 
             : '';
@@ -1748,6 +1750,40 @@ class DatabaseHelper {
     } catch (e) {
       print('Error getting individual CPL result: $e');
       return null;
+    }
+  }
+
+  /// Get CPL calculation results for all mahasiswa in a specific angkatan (tahun_masuk)
+  Future<List<Map<String, dynamic>>> getCPLResultsByAngkatan(int tahunMasuk) async {
+    final db = await database;
+    
+    try {
+      print('[DB] Querying CPL results for tahun_masuk = $tahunMasuk');
+      print('[DB] Using tables: $tableCPLResults, $tableMahasiswa');
+      
+      final results = await db.rawQuery('''
+        SELECT cr.*, m.nim, m.nama, m.tahun_masuk
+        FROM $tableCPLResults cr
+        INNER JOIN $tableMahasiswa m ON cr.mahasiswa_id = m.id
+        WHERE m.tahun_masuk = ?
+        ORDER BY m.nim ASC
+      ''', [tahunMasuk]);
+      
+      print('[DB] Query returned ${results.length} rows');
+      
+      // Also check if table exists and has data
+      if (results.isEmpty) {
+        final tableCheck = await db.rawQuery('SELECT COUNT(*) as cnt FROM $tableCPLResults');
+        print('[DB] Total rows in $tableCPLResults: ${tableCheck.first['cnt']}');
+        
+        final mahasiswaCheck = await db.rawQuery('SELECT COUNT(*) as cnt FROM $tableMahasiswa WHERE tahun_masuk = ?', [tahunMasuk]);
+        print('[DB] Mahasiswa with tahun_masuk=$tahunMasuk in $tableMahasiswa: ${mahasiswaCheck.first['cnt']}');
+      }
+      
+      return results;
+    } catch (e) {
+      print('[DB] Error getting CPL results by angkatan: $e');
+      return [];
     }
   }
 

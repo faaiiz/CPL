@@ -133,6 +133,11 @@ class _RPSInputScreenState extends State<RPSInputScreen> {
 
         // Show detail dialog
         _showImportResultDialog(importResult);
+        // Refresh data setelah import berhasil
+        await Future.delayed(const Duration(milliseconds: 500));
+        if (mounted) {
+          _loadMatakuliah();
+        }
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -391,8 +396,13 @@ class _RPSInputScreenState extends State<RPSInputScreen> {
         // Show detail dialog
         _showRPSImportResultDialog(importResult);
 
-        // Refresh cache
+        // Refresh cache dan reload data
         _rpsCache.clear();
+        // Refresh data setelah import berhasil
+        await Future.delayed(const Duration(milliseconds: 500));
+        if (mounted) {
+          _loadMatakuliah();
+        }
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(

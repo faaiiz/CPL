@@ -214,6 +214,11 @@ class _SubCPMKBatchImportScreenState extends State<SubCPMKBatchImportScreen> {
               duration: const Duration(seconds: 3),
             ),
           );
+          // Refresh data setelah import berhasil
+          await Future.delayed(const Duration(milliseconds: 500));
+          if (mounted) {
+            _loadMatakuliah();
+          }
         } else {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
