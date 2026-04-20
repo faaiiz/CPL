@@ -162,7 +162,7 @@ class _CPLCPMKExportScreenState extends State<CPLCPMKExportScreen>
     });
   }
 
-  Future<void> _exportReport() async {
+  Future<void> _exportReport({String language = 'id'}) async {
     if (_selectedMatakuliah == null || _selectedTahunAjaran == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -379,14 +379,21 @@ class _CPLCPMKExportScreenState extends State<CPLCPMKExportScreen>
 
       print('[Export] Total calculation results: ${calculationResults.length}');
 
+      // If exporting to English, get mk_eng from database
+      String matakuliahName = matakuliah.nama;
+      if (language == 'en' && matakuliah.namaEng != null && matakuliah.namaEng!.isNotEmpty) {
+        matakuliahName = matakuliah.namaEng!;
+      }
+
       // Generate PDF
       final pdfFile = await CPLCPMKPDFGenerator.generateCPLCPMKReport(
-        matakuliah: matakuliah,
+        matakuliah: matakuliah.copyWith(nama: matakuliahName),
         mahasiswaList: mahasiswaList,
         cpmkList: cpmkList,
         cplList: cplList,
         calculationResults: calculationResults,
         tahunAjaran: _selectedTahunAjaran ?? '2024/2025',
+        language: language,
       );
 
       if (mounted) {
@@ -433,7 +440,7 @@ class _CPLCPMKExportScreenState extends State<CPLCPMKExportScreen>
     }
   }
 
-  Future<void> _exportPerMahasiswa() async {
+  Future<void> _exportPerMahasiswa({String language = 'id'}) async {
     if (_selectedMahasiswa == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -486,7 +493,7 @@ class _CPLCPMKExportScreenState extends State<CPLCPMKExportScreen>
       final Map<int, Map<String, dynamic>> mkScoresMap = {}; // mkId -> {cpmk: {...}, cpl: {...}}
 
       for (final mkId in mkDataMap.keys) {
-        final mk = allMatakuliah.firstWhere(
+        var mk = allMatakuliah.firstWhere(
           (m) => m.id == mkId,
           orElse: () => Matakuliah(
             id: mkId,
@@ -498,6 +505,11 @@ class _CPLCPMKExportScreenState extends State<CPLCPMKExportScreen>
             createdAt: DateTime.now(),
           ),
         );
+        
+        // If exporting to English, use mk_eng if available
+        if (language == 'en' && mk.namaEng != null && mk.namaEng!.isNotEmpty) {
+          mk = mk.copyWith(nama: mk.namaEng);
+        }
 
         final nilaiKomponen = mkDataMap[mkId]!;
 
@@ -589,6 +601,7 @@ class _CPLCPMKExportScreenState extends State<CPLCPMKExportScreen>
         mahasiswa: mahasiswa,
         mkScoresMap: mkScoresMap,
         cplList: cplList,
+        language: language,
       );
 
       if (mounted) {
@@ -635,7 +648,7 @@ class _CPLCPMKExportScreenState extends State<CPLCPMKExportScreen>
     }
   }
 
-  Future<void> _exportPerAngkatan() async {
+  Future<void> _exportPerAngkatan({String language = 'id'}) async {
     if (_selectedAngkatan3 == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -787,6 +800,7 @@ class _CPLCPMKExportScreenState extends State<CPLCPMKExportScreen>
         angkatan: angkatan,
         studentScoresMap: finalStudentScoresMap,
         cplList: cplList,
+        language: language,
       );
 
       if (mounted) {
@@ -1059,40 +1073,81 @@ class _CPLCPMKExportScreenState extends State<CPLCPMKExportScreen>
 
           const SizedBox(height: 32),
 
-          // Export Button
-          SizedBox(
-            width: double.infinity,
-            height: 50,
-            child: ElevatedButton.icon(
-              onPressed: _isExporting ? null : _exportReport,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF8E44AD),
-                disabledBackgroundColor: Colors.grey[400],
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
-              ),
-              icon: _isExporting
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        valueColor: AlwaysStoppedAnimation<Color>(
-                          Colors.white,
-                        ),
+          // Export Buttons
+          Row(
+            children: [
+              Expanded(
+                child: SizedBox(
+                  height: 50,
+                  child: ElevatedButton.icon(
+                    onPressed: _isExporting ? null : () => _exportReport(language: 'id'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF8E44AD),
+                      disabledBackgroundColor: Colors.grey[400],
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
                       ),
-                    )
-                  : const Icon(Icons.download, color: Colors.white),
-              label: Text(
-                _isExporting ? 'Sedang membuat laporan...' : 'Unduh Laporan PDF',
-                style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.white,
+                    ),
+                    icon: _isExporting
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                Colors.white,
+                              ),
+                            ),
+                          )
+                        : const Icon(Icons.download, color: Colors.white),
+                    label: Text(
+                      _isExporting ? 'Sedang membuat laporan...' : 'Unduh Laporan PDF',
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
                 ),
               ),
-            ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: SizedBox(
+                  height: 50,
+                  child: ElevatedButton.icon(
+                    onPressed: _isExporting ? null : () => _exportReport(language: 'en'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF8E44AD),
+                      disabledBackgroundColor: Colors.grey[400],
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                    icon: _isExporting
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                Colors.white,
+                              ),
+                            ),
+                          )
+                        : const Icon(Icons.save, color: Colors.white),
+                    label: Text(
+                      _isExporting ? 'Sedang membuat laporan...' : 'Save as PDF',
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -1299,40 +1354,81 @@ class _CPLCPMKExportScreenState extends State<CPLCPMKExportScreen>
 
           const SizedBox(height: 32),
 
-          // Export Button
-          SizedBox(
-            width: double.infinity,
-            height: 50,
-            child: ElevatedButton.icon(
-              onPressed: _isExporting ? null : _exportPerMahasiswa,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF8E44AD),
-                disabledBackgroundColor: Colors.grey[400],
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
-              ),
-              icon: _isExporting
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        valueColor: AlwaysStoppedAnimation<Color>(
-                          Colors.white,
-                        ),
+          // Export Buttons
+          Row(
+            children: [
+              Expanded(
+                child: SizedBox(
+                  height: 50,
+                  child: ElevatedButton.icon(
+                    onPressed: _isExporting ? null : () => _exportPerMahasiswa(language: 'id'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF8E44AD),
+                      disabledBackgroundColor: Colors.grey[400],
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
                       ),
-                    )
-                  : const Icon(Icons.download, color: Colors.white),
-              label: Text(
-                _isExporting ? 'Sedang membuat laporan...' : 'Unduh Laporan PDF',
-                style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.white,
+                    ),
+                    icon: _isExporting
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                Colors.white,
+                              ),
+                            ),
+                          )
+                        : const Icon(Icons.download, color: Colors.white),
+                    label: Text(
+                      _isExporting ? 'Sedang membuat laporan...' : 'Unduh Laporan PDF',
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
                 ),
               ),
-            ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: SizedBox(
+                  height: 50,
+                  child: ElevatedButton.icon(
+                    onPressed: _isExporting ? null : () => _exportPerMahasiswa(language: 'en'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF8E44AD),
+                      disabledBackgroundColor: Colors.grey[400],
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                    icon: _isExporting
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                Colors.white,
+                              ),
+                            ),
+                          )
+                        : const Icon(Icons.save, color: Colors.white),
+                    label: Text(
+                      _isExporting ? 'Sedang membuat laporan...' : 'Save as PDF',
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -1494,40 +1590,81 @@ class _CPLCPMKExportScreenState extends State<CPLCPMKExportScreen>
 
           const SizedBox(height: 32),
 
-          // Export Button
-          SizedBox(
-            width: double.infinity,
-            height: 50,
-            child: ElevatedButton.icon(
-              onPressed: _isExporting ? null : _exportPerAngkatan,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF8E44AD),
-                disabledBackgroundColor: Colors.grey[400],
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
-              ),
-              icon: _isExporting
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        valueColor: AlwaysStoppedAnimation<Color>(
-                          Colors.white,
-                        ),
+          // Export Buttons
+          Row(
+            children: [
+              Expanded(
+                child: SizedBox(
+                  height: 50,
+                  child: ElevatedButton.icon(
+                    onPressed: _isExporting ? null : () => _exportPerAngkatan(language: 'id'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF8E44AD),
+                      disabledBackgroundColor: Colors.grey[400],
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
                       ),
-                    )
-                  : const Icon(Icons.download, color: Colors.white),
-              label: Text(
-                _isExporting ? 'Sedang membuat laporan...' : 'Unduh Laporan PDF',
-                style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.white,
+                    ),
+                    icon: _isExporting
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                Colors.white,
+                              ),
+                            ),
+                          )
+                        : const Icon(Icons.download, color: Colors.white),
+                    label: Text(
+                      _isExporting ? 'Sedang membuat laporan...' : 'Unduh Laporan PDF',
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
                 ),
               ),
-            ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: SizedBox(
+                  height: 50,
+                  child: ElevatedButton.icon(
+                    onPressed: _isExporting ? null : () => _exportPerAngkatan(language: 'en'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF8E44AD),
+                      disabledBackgroundColor: Colors.grey[400],
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                    icon: _isExporting
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                Colors.white,
+                              ),
+                            ),
+                          )
+                        : const Icon(Icons.save, color: Colors.white),
+                    label: Text(
+                      _isExporting ? 'Sedang membuat laporan...' : 'Save as PDF',
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),

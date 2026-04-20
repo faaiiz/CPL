@@ -8,6 +8,7 @@ class Matakuliah {
   final bool isActive;
   final DateTime createdAt;
   final DateTime? updatedAt;
+  final String? namaEng; // Nama matakuliah dalam bahasa inggris
 
   Matakuliah({
     this.id,
@@ -19,6 +20,7 @@ class Matakuliah {
     this.isActive = true,
     required this.createdAt,
     this.updatedAt,
+    this.namaEng,
   });
 
   factory Matakuliah.fromMap(Map<String, dynamic> map) {
@@ -34,6 +36,7 @@ class Matakuliah {
       updatedAt: map['updated_at'] != null
           ? DateTime.parse(map['updated_at'] as String)
           : null,
+      namaEng: map['mk_eng'] as String?,
     );
   }
 
@@ -48,6 +51,7 @@ class Matakuliah {
       'is_active': isActive ? 1 : 0,
       'created_at': createdAt.toIso8601String(),
       'updated_at': updatedAt?.toIso8601String(),
+      'mk_eng': namaEng,
     };
   }
 
@@ -61,6 +65,7 @@ class Matakuliah {
     bool? isActive,
     DateTime? createdAt,
     DateTime? updatedAt,
+    String? namaEng,
   }) {
     return Matakuliah(
       id: id ?? this.id,
@@ -72,6 +77,7 @@ class Matakuliah {
       isActive: isActive ?? this.isActive,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
+      namaEng: namaEng ?? this.namaEng,
     );
   }
 }

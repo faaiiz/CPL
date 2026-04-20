@@ -38,6 +38,7 @@ class CPLCPMKPDFGenerator {
     required List<CPLMaster> cplList,
     required Map<int, OBECalculationResult> calculationResults,
     required String tahunAjaran,
+    String language = 'id',
   }) async {
     final pdf = pw.Document();
 
@@ -50,6 +51,7 @@ class CPLCPMKPDFGenerator {
     }
 
     // PAGE 1: COVER PAGE
+    final isEnglish = language == 'en';
     pdf.addPage(
       pw.MultiPage(
         pageFormat: PdfPageFormat.a4,
@@ -68,7 +70,7 @@ class CPLCPMKPDFGenerator {
 
           // Title
           pw.Text(
-            'LAPORAN NILAI',
+            isEnglish ? 'GRADE REPORT' : 'LAPORAN NILAI',
             style: pw.TextStyle(
               fontSize: 28,
               fontWeight: pw.FontWeight.bold,
@@ -77,7 +79,9 @@ class CPLCPMKPDFGenerator {
           ),
 
           pw.Text(
-            'Capaian Pembelajaran Lulusan (CPL) dan Capaian Pembelajaran Mata Kuliah (CPMK)',
+            isEnglish
+                ? 'Program Learning Outcomes (PLO) and Course Learning Outcomes (CLO)'
+                : 'Capaian Pembelajaran Lulusan (CPL) dan Capaian Pembelajaran Mata Kuliah (CPMK)',
             style: pw.TextStyle(
               fontSize: 14,
               fontWeight: pw.FontWeight.bold,
@@ -89,19 +93,21 @@ class CPLCPMKPDFGenerator {
 
           // Course info
           _buildInfoSection([
-            ['Mata Kuliah:', matakuliah.nama],
-            ['Kode Mata Kuliah:', matakuliah.kode],
-            ['SKS:', '${matakuliah.sks}'],
-            ['Semester:', '${matakuliah.semester}'],
-            ['Tahun Ajaran:', tahunAjaran],
-            ['Jumlah Mahasiswa:', '${mahasiswaList.length}'],
+            [isEnglish ? 'Course:' : 'Mata Kuliah:', matakuliah.nama],
+            [isEnglish ? 'Course Code:' : 'Kode Mata Kuliah:', matakuliah.kode],
+            [isEnglish ? 'Credits:' : 'SKS:', '${matakuliah.sks}'],
+            [isEnglish ? 'Semester:' : 'Semester:', '${matakuliah.semester}'],
+            [isEnglish ? 'Academic Year:' : 'Tahun Ajaran:', tahunAjaran],
+            [isEnglish ? 'Total Students:' : 'Jumlah Mahasiswa:', '${mahasiswaList.length}'],
           ]),
 
           pw.SizedBox(height: 40),
 
           // Report info
           pw.Text(
-            'Laporan ini menampilkan nilai CPL dan CPMK untuk mata kuliah di atas.',
+            isEnglish
+                ? 'This report displays Program Learning Outcomes (PLO) and Course Learning Outcomes (CLO) for the course above.'
+                : 'Laporan ini menampilkan nilai CPL dan CPMK untuk mata kuliah di atas.',
             style: const pw.TextStyle(fontSize: 11),
             textAlign: pw.TextAlign.justify,
           ),
@@ -118,7 +124,9 @@ class CPLCPMKPDFGenerator {
         build: (context) => [
           // Header
           pw.Text(
-            'Hasil Penilaian Mahasiswa - ${matakuliah.nama}',
+            isEnglish
+                ? 'Student Assessment Results - ${matakuliah.nama}'
+                : 'Hasil Penilaian Mahasiswa - ${matakuliah.nama}',
             style: pw.TextStyle(
               fontSize: 14,
               fontWeight: pw.FontWeight.bold,
@@ -128,11 +136,11 @@ class CPLCPMKPDFGenerator {
           pw.SizedBox(height: 10),
 
           // Build table
-          _buildStudentGradesTable(mahasiswaList, cpmkList, cplList, calculationResults),
+          _buildStudentGradesTable(mahasiswaList, cpmkList, cplList, calculationResults, language: language),
 
           pw.SizedBox(height: 20),
 
-          _buildFooter(),
+          _buildFooter(language: language),
         ],
       ),
     );
@@ -144,7 +152,7 @@ class CPLCPMKPDFGenerator {
         margin: const pw.EdgeInsets.all(40),
         build: (context) => [
           pw.Text(
-            'RINGKASAN STATISTIK',
+            isEnglish ? 'SUMMARY STATISTICS' : 'RINGKASAN STATISTIK',
             style: pw.TextStyle(
               fontSize: 16,
               fontWeight: pw.FontWeight.bold,
@@ -153,11 +161,11 @@ class CPLCPMKPDFGenerator {
 
           pw.SizedBox(height: 20),
 
-          _buildStatisticsSection(mahasiswaList, cpmkList, cplList, calculationResults),
+          _buildStatisticsSection(mahasiswaList, cpmkList, cplList, calculationResults, language: language),
 
           pw.SizedBox(height: 30),
 
-          _buildFooter(),
+          _buildFooter(language: language),
         ],
       ),
     );
@@ -211,8 +219,10 @@ class CPLCPMKPDFGenerator {
     List<Mahasiswa> mahasiswaList,
     List<CPMK> cpmkList,
     List<CPLMaster> cplList,
-    Map<int, OBECalculationResult> calculationResults,
-  ) {
+    Map<int, OBECalculationResult> calculationResults, {
+    String language = 'id',
+  }) {
+    final isEnglish = language == 'en';
     // Extract unique CPMK and CPL IDs from results
     final cpmkIds = <String>{};
     final cplIds = <String>{};
@@ -246,15 +256,17 @@ class CPLCPMKPDFGenerator {
     // Build table headers
     final headers = <String>[
       'No',
-      'NIM',
-      'Nama Mahasiswa',
+      isEnglish ? 'Student ID' : 'NIM',
+      isEnglish ? 'Name' : 'Nama Mahasiswa',
     ];
-    headers.addAll(sortedCpmkIds.map((id) => 'CPMK.$id'));
-    headers.addAll(sortedCplIds.map((id) => 'CPL.$id'));
+    final cpmkPrefix = isEnglish ? 'CLO' : 'CPMK';
+    final cplPrefix = isEnglish ? 'PLO' : 'CPL';
+    headers.addAll(sortedCpmkIds.map((id) => '$cpmkPrefix.$id'));
+    headers.addAll(sortedCplIds.map((id) => '$cplPrefix.$id'));
 
     // If still no headers, at least show NIM and Nama
     if (headers.length == 3) {
-      headers.add('Keterangan');
+      headers.add(isEnglish ? 'Notes' : 'Keterangan');
     }
 
     // Build table rows
@@ -298,7 +310,9 @@ class CPLCPMKPDFGenerator {
       if (sortedCpmkIds.isEmpty && sortedCplIds.isEmpty) {
         row.add(
           pw.Text(
-            result != null ? 'Data tersedia' : 'Belum dihitung',
+            result != null
+                ? (isEnglish ? 'Data available' : 'Data tersedia')
+                : (isEnglish ? 'Not calculated' : 'Belum dihitung'),
             textAlign: pw.TextAlign.center,
           ),
         );
@@ -367,10 +381,13 @@ class CPLCPMKPDFGenerator {
     List<Mahasiswa> mahasiswaList,
     List<CPMK> cpmkList,
     List<CPLMaster> cplList,
-    Map<int, OBECalculationResult> calculationResults,
-  ) {
+    Map<int, OBECalculationResult> calculationResults, {
+    String language = 'id',
+  }) {
+    final isEnglish = language == 'en';
+    
     if (calculationResults.isEmpty) {
-      return pw.Text('Tidak ada data untuk ditampilkan');
+      return pw.Text(isEnglish ? 'No data to display' : 'Tidak ada data untuk ditampilkan');
     }
 
     // Calculate statistics
@@ -412,22 +429,44 @@ class CPLCPMKPDFGenerator {
       crossAxisAlignment: pw.CrossAxisAlignment.start,
       children: [
         pw.Text(
-          'Nilai Capaian Pembelajaran Mata Kuliah (CPMK)',
+          isEnglish
+              ? 'Course Learning Outcomes (CLO) Scores'
+              : 'Nilai Capaian Pembelajaran Mata Kuliah (CPMK)',
           style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 12),
         ),
         pw.SizedBox(height: 10),
-        _buildStatItem('Rata-rata CPMK', avgCpmk),
-        _buildStatItem('Nilai Tertinggi', maxCpmkVal),
-        _buildStatItem('Nilai Terendah', minCpmkVal),
+        _buildStatItem(
+          isEnglish ? 'Average CLO' : 'Rata-rata CPMK',
+          avgCpmk,
+        ),
+        _buildStatItem(
+          isEnglish ? 'Highest Score' : 'Nilai Tertinggi',
+          maxCpmkVal,
+        ),
+        _buildStatItem(
+          isEnglish ? 'Lowest Score' : 'Nilai Terendah',
+          minCpmkVal,
+        ),
         pw.SizedBox(height: 20),
         pw.Text(
-          'Nilai Capaian Pembelajaran Lulusan (CPL)',
+          isEnglish
+              ? 'Program Learning Outcomes (PLO) Scores'
+              : 'Nilai Capaian Pembelajaran Lulusan (CPL)',
           style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 12),
         ),
         pw.SizedBox(height: 10),
-        _buildStatItem('Rata-rata CPL', avgCpl),
-        _buildStatItem('Nilai Tertinggi', maxCplVal),
-        _buildStatItem('Nilai Terendah', minCplVal),
+        _buildStatItem(
+          isEnglish ? 'Average PLO' : 'Rata-rata CPL',
+          avgCpl,
+        ),
+        _buildStatItem(
+          isEnglish ? 'Highest Score' : 'Nilai Tertinggi',
+          maxCplVal,
+        ),
+        _buildStatItem(
+          isEnglish ? 'Lowest Score' : 'Nilai Terendah',
+          minCplVal,
+        ),
       ],
     );
   }
@@ -458,13 +497,16 @@ class CPLCPMKPDFGenerator {
     );
   }
 
-  static pw.Widget _buildFooter() {
+  static pw.Widget _buildFooter({String language = 'id'}) {
+    final isEnglish = language == 'en';
     return pw.Column(
       children: [
         pw.Divider(),
         pw.SizedBox(height: 10),
         pw.Text(
-          'Dokumen ini dihasilkan oleh Sistem Informasi CPL',
+          isEnglish
+              ? 'This document was generated by the CPL Information System'
+              : 'Dokumen ini dihasilkan oleh Sistem Informasi CPL',
           style: const pw.TextStyle(fontSize: 8, color: PdfColors.grey),
           textAlign: pw.TextAlign.center,
         ),
@@ -477,6 +519,7 @@ class CPLCPMKPDFGenerator {
     required Mahasiswa mahasiswa,
     required Map<int, Map<String, dynamic>> mkScoresMap,
     required List<CPLMaster> cplList,
+    String language = 'id',
   }) async {
     final pdf = pw.Document();
 
@@ -489,6 +532,7 @@ class CPLCPMKPDFGenerator {
     }
 
     // COVER PAGE
+    final isEnglish = language == 'en';
     pdf.addPage(
       pw.MultiPage(
         pageFormat: PdfPageFormat.a4,
@@ -505,13 +549,15 @@ class CPLCPMKPDFGenerator {
           pw.SizedBox(height: 20),
 
           pw.Text(
-            'LAPORAN INDIVIDUAL MAHASISWA',
+            isEnglish ? 'INDIVIDUAL STUDENT REPORT' : 'LAPORAN INDIVIDUAL MAHASISWA',
             style: pw.TextStyle(fontSize: 28, fontWeight: pw.FontWeight.bold),
             textAlign: pw.TextAlign.center,
           ),
 
           pw.Text(
-            'Capaian Pembelajaran Lulusan (CPL) dan Capaian Pembelajaran Mata Kuliah (CPMK)',
+            isEnglish
+                ? 'Program Learning Outcomes (PLO) and Course Learning Outcomes (CLO)'
+                : 'Capaian Pembelajaran Lulusan (CPL) dan Capaian Pembelajaran Mata Kuliah (CPMK)',
             style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold),
             textAlign: pw.TextAlign.center,
           ),
@@ -519,20 +565,22 @@ class CPLCPMKPDFGenerator {
           pw.SizedBox(height: 40),
 
           _buildInfoSection([
-            ['NIM:', mahasiswa.nim],
-            ['Nama:', mahasiswa.nama],
-            ['Status:', mahasiswa.status],
-            ['Tahun Masuk:', '${mahasiswa.tahunMasuk}'],
+            [isEnglish ? 'Student ID:' : 'NIM:', mahasiswa.nim],
+            [isEnglish ? 'Name:' : 'Nama:', mahasiswa.nama],
+            [isEnglish ? 'Status:' : 'Status:', mahasiswa.status],
+            [isEnglish ? 'Year Entered:' : 'Tahun Masuk:', '${mahasiswa.tahunMasuk}'],
           ]),
 
           pw.SizedBox(height: 40),
 
           pw.Text(
-            'Catatan:',
+            isEnglish ? 'Notes:' : 'Catatan:',
             style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold),
           ),
           pw.Text(
-            'Laporan ini menampilkan nilai CPMK/CPL per mata kuliah yang telah ditempuh dan rata-rata nilai keseluruhan.',
+            isEnglish
+                ? 'This report displays Course Learning Outcomes (CLO) / Program Learning Outcomes (PLO) per course taken and overall average scores.'
+                : 'Laporan ini menampilkan nilai CPMK/CPL per mata kuliah yang telah ditempuh dan rata-rata nilai keseluruhan.',
             style: const pw.TextStyle(fontSize: 10),
           ),
         ],
@@ -567,12 +615,15 @@ class CPLCPMKPDFGenerator {
           pageFormat: PdfPageFormat.a4.landscape,
           margin: const pw.EdgeInsets.all(30),
           build: (context) => [
-            pw.Text('Nilai Per Mata Kuliah', style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
+            pw.Text(
+              isEnglish ? 'Scores Per Course' : 'Nilai Per Mata Kuliah',
+              style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold),
+            ),
             pw.SizedBox(height: 15),
 
             pw.TableHelper.fromTextArray(
               context: context,
-              data: _buildMahasiswaDetailTable(mkScoresMap),
+              data: _buildMahasiswaDetailTable(mkScoresMap, language: language),
               headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 8),
               cellStyle: const pw.TextStyle(fontSize: 7),
               rowDecoration: pw.BoxDecoration(
@@ -585,12 +636,15 @@ class CPLCPMKPDFGenerator {
 
             pw.SizedBox(height: 20),
 
-            pw.Text('Nilai CPMK', style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold)),
+            pw.Text(
+              isEnglish ? 'Course Learning Outcomes (CLO)' : 'Nilai CPMK',
+              style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold),
+            ),
             pw.SizedBox(height: 10),
 
             pw.TableHelper.fromTextArray(
               context: context,
-              data: _buildAverageTable('CPMK', cpmkAverages),
+              data: _buildAverageTable('CPMK', cpmkAverages, language: language),
               headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 8),
               cellStyle: const pw.TextStyle(fontSize: 7),
               rowDecoration: pw.BoxDecoration(
@@ -603,12 +657,15 @@ class CPLCPMKPDFGenerator {
 
             pw.SizedBox(height: 20),
 
-            pw.Text('Nilai CPL', style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold)),
+            pw.Text(
+              isEnglish ? 'Program Learning Outcomes (PLO)' : 'Nilai CPL',
+              style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold),
+            ),
             pw.SizedBox(height: 10),
 
             pw.TableHelper.fromTextArray(
               context: context,
-              data: _buildAverageTable('CPL', cplAverages),
+              data: _buildAverageTable('CPL', cplAverages, language: language),
               headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 8),
               cellStyle: const pw.TextStyle(fontSize: 7),
               rowDecoration: pw.BoxDecoration(
@@ -620,7 +677,7 @@ class CPLCPMKPDFGenerator {
             ),
 
             pw.SizedBox(height: 20),
-            _buildFooter(),
+            _buildFooter(language: language),
           ],
         ),
       );
@@ -641,6 +698,7 @@ class CPLCPMKPDFGenerator {
     required int angkatan,
     required Map<int, Map<String, dynamic>> studentScoresMap,
     required List<CPLMaster> cplList,
+    String language = 'id',
   }) async {
     final pdf = pw.Document();
 
@@ -653,6 +711,7 @@ class CPLCPMKPDFGenerator {
     }
 
     // COVER PAGE
+    final isEnglish = language == 'en';
     pdf.addPage(
       pw.MultiPage(
         pageFormat: PdfPageFormat.a4,
@@ -669,13 +728,13 @@ class CPLCPMKPDFGenerator {
           pw.SizedBox(height: 20),
 
           pw.Text(
-            ' ',
+            isEnglish ? ' ' : ' ',
             style: pw.TextStyle(fontSize: 28, fontWeight: pw.FontWeight.bold),
             textAlign: pw.TextAlign.center,
           ),
 
           pw.Text(
-            'Capaian Pembelajaran Lulusan (CPL)',
+            isEnglish ? 'Program Learning Outcomes (PLO)' : 'Capaian Pembelajaran Lulusan (CPL)',
             style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold),
             textAlign: pw.TextAlign.center,
           ),
@@ -683,19 +742,21 @@ class CPLCPMKPDFGenerator {
           pw.SizedBox(height: 40),
 
           _buildInfoSection([
-            ['Tahun Angkatan:', '$angkatan'],
-            ['Jumlah Mahasiswa:', '${studentScoresMap.length}'],
-            ['Tanggal Laporan:', DateFormat('dd MMMM yyyy', 'id_ID').format(DateTime.now())],
+            [isEnglish ? 'Year Cohort:' : 'Tahun Angkatan:', '$angkatan'],
+            [isEnglish ? 'Total Students:' : 'Jumlah Mahasiswa:', '${studentScoresMap.length}'],
+            [isEnglish ? 'Report Date:' : 'Tanggal Laporan:', DateFormat('dd MMMM yyyy', isEnglish ? 'en_US' : 'id_ID').format(DateTime.now())],
           ]),
 
           pw.SizedBox(height: 40),
 
           pw.Text(
-            'Catatan:',
+            isEnglish ? 'Notes:' : 'Catatan:',
             style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold),
           ),
           pw.Text(
-            'Laporan ini menampilkan rata-rata nilai CPMK/CPL semua mahasiswa dalam satu angkatan.',
+            isEnglish
+                ? 'This report displays average Program Learning Outcomes (PLO) and Course Learning Outcomes (CLO) for all students in one cohort.'
+                : 'Laporan ini menampilkan rata-rata nilai CPMK/CPL semua mahasiswa dalam satu angkatan.',
             style: const pw.TextStyle(fontSize: 10),
           ),
         ],
@@ -708,14 +769,17 @@ class CPLCPMKPDFGenerator {
         pageFormat: PdfPageFormat.a4.landscape,
         margin: const pw.EdgeInsets.all(30),
         build: (context) => [
-          pw.Text('Nilai Capaian Pembelajaran Lulusan (CPL) - Angkatan $angkatan', 
+          pw.Text(
+              isEnglish
+                  ? 'Program Learning Outcomes (PLO) Assessment Results - Cohort $angkatan'
+                  : 'Nilai Capaian Pembelajaran Lulusan (CPL) - Angkatan $angkatan',
             style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
           pw.SizedBox(height: 15),
 
           if (studentScoresMap.isNotEmpty)
             pw.TableHelper.fromTextArray(
               context: context,
-              data: _buildAngkatanCplOnlyTable(studentScoresMap),
+              data: _buildAngkatanCplOnlyTable(studentScoresMap, language: language),
               headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 8),
               cellStyle: const pw.TextStyle(fontSize: 7),
               rowDecoration: pw.BoxDecoration(
@@ -727,12 +791,14 @@ class CPLCPMKPDFGenerator {
             )
           else
             pw.Text(
-              'Tidak ada data mahasiswa untuk angkatan ini.',
+              isEnglish
+                  ? 'No student data available for this cohort.'
+                  : 'Tidak ada data mahasiswa untuk angkatan ini.',
               style: const pw.TextStyle(fontSize: 11),
             ),
 
           pw.SizedBox(height: 20),
-          _buildFooter(),
+          _buildFooter(language: language),
         ],
       ),
     );
@@ -747,9 +813,20 @@ class CPLCPMKPDFGenerator {
   }
 
   /// Helper: Build mahasiswa detail table
-  static List<List<String>> _buildMahasiswaDetailTable(Map<int, Map<String, dynamic>> mkScoresMap) {
+  static List<List<String>> _buildMahasiswaDetailTable(
+    Map<int, Map<String, dynamic>> mkScoresMap, {
+    String language = 'id',
+  }) {
+    final isEnglish = language == 'en';
     final rows = <List<String>>[
-      ['No', 'Mata Kuliah', 'Kode CPMK', 'Nilai CPMK', 'Kode CPL', 'Nilai CPL'],
+      [
+        isEnglish ? 'No' : 'No',
+        isEnglish ? 'Course' : 'Mata Kuliah',
+        isEnglish ? 'CLO Code' : 'Kode CPMK',
+        isEnglish ? 'CLO Score' : 'Nilai CPMK',
+        isEnglish ? 'PLO Code' : 'Kode CPL',
+        isEnglish ? 'PLO Score' : 'Nilai CPL',
+      ],
     ];
 
     int no = 1;
@@ -770,8 +847,10 @@ class CPLCPMKPDFGenerator {
       final cpmkCodes = cpmkMap.keys.toList()..sort((a, b) => (int.tryParse(a) ?? 0).compareTo(int.tryParse(b) ?? 0));
       final cplCodes = cplMap.keys.toList()..sort((a, b) => (int.tryParse(a) ?? 0).compareTo(int.tryParse(b) ?? 0));
 
-      final cpmkCodeStr = cpmkCodes.isNotEmpty ? cpmkCodes.map((c) => 'CPMK.$c').join(', ') : '-';
-      final cplCodeStr = cplCodes.isNotEmpty ? cplCodes.map((c) => 'CPL.$c').join(', ') : '-';
+      final cpmkPrefix = isEnglish ? 'CLO' : 'CPMK';
+      final cplPrefix = isEnglish ? 'PLO' : 'CPL';
+      final cpmkCodeStr = cpmkCodes.isNotEmpty ? cpmkCodes.map((c) => '$cpmkPrefix.$c').join(', ') : '-';
+      final cplCodeStr = cplCodes.isNotEmpty ? cplCodes.map((c) => '$cplPrefix.$c').join(', ') : '-';
 
       final avgCpmk = cpmkMap.isNotEmpty
           ? (cpmkMap.values.reduce((a, b) => a + b) / cpmkMap.length).toStringAsFixed(2)
@@ -796,13 +875,26 @@ class CPLCPMKPDFGenerator {
   }
 
   /// Helper: Build average table
-  static List<List<String>> _buildAverageTable(String type, Map<String, double> averages) {
+  static List<List<String>> _buildAverageTable(
+    String type,
+    Map<String, double> averages, {
+    String language = 'id',
+  }) {
+    final isEnglish = language == 'en';
+    final typeLabel = isEnglish
+        ? (type == 'CPMK'
+            ? 'CLO Code'
+            : 'PLO Code')
+        : 'Kode $type';
+    final scoreLabel = isEnglish ? 'Average Score' : 'Nilai Rata-Rata';
+    
     final rows = <List<String>>[
-      ['Kode $type', 'Nilai Rata-Rata'],
+      [typeLabel, scoreLabel],
     ];
 
     if (averages.isEmpty) {
-      return [['Kode $type', 'Nilai Rata-Rata'], ['Tidak ada data', '']];
+      final noDataMsg = isEnglish ? 'No data' : 'Tidak ada data';
+      return [[typeLabel, scoreLabel], [noDataMsg, '']];
     }
 
     // Sort entries by ID (numerically)
@@ -814,8 +906,9 @@ class CPLCPMKPDFGenerator {
       });
 
     for (final entry in sortedEntries) {
+      final prefix = isEnglish ? (type == 'CPMK' ? 'CLO' : 'PLO') : type;
       rows.add([
-        '$type.${entry.key}',
+        '$prefix.${entry.key}',
         entry.value.toStringAsFixed(2),
       ]);
     }
@@ -824,9 +917,18 @@ class CPLCPMKPDFGenerator {
   }
 
   /// Helper: Build angkatan CPMK table with individual CPMK columns
-  static List<List<String>> _buildAngkatanCpmkTable(Map<int, Map<String, dynamic>> studentScoresMap) {
+  static List<List<String>> _buildAngkatanCpmkTable(
+    Map<int, Map<String, dynamic>> studentScoresMap, {
+    String language = 'id',
+  }) {
+    final isEnglish = language == 'en';
     if (studentScoresMap.isEmpty) {
-      return [['No', 'NIM', 'Nama', 'Keterangan']];
+      return [[
+        'No',
+        isEnglish ? 'Student ID' : 'NIM',
+        isEnglish ? 'Name' : 'Nama',
+        isEnglish ? 'Notes' : 'Keterangan',
+      ]];
     }
 
     // Get all unique CPMK IDs and sort them
@@ -839,8 +941,13 @@ class CPLCPMKPDFGenerator {
       ..sort((a, b) => (int.tryParse(a) ?? 0).compareTo(int.tryParse(b) ?? 0));
 
     // Build header
-    final headers = ['No', 'NIM', 'Nama'];
-    headers.addAll(sortedCpmkIds.map((id) => 'CPMK.$id'));
+    final cloPrefix = isEnglish ? 'CLO' : 'CPMK';
+    final headers = [
+      'No',
+      isEnglish ? 'Student ID' : 'NIM',
+      isEnglish ? 'Name' : 'Nama',
+    ];
+    headers.addAll(sortedCpmkIds.map((id) => '$cloPrefix.$id'));
     final rows = <List<String>>[headers];
 
     // Sort students by NIM
@@ -876,9 +983,18 @@ class CPLCPMKPDFGenerator {
   }
 
   /// Helper: Build angkatan CPL table with individual CPL columns
-  static List<List<String>> _buildAngkatanCplTable(Map<int, Map<String, dynamic>> studentScoresMap) {
+  static List<List<String>> _buildAngkatanCplTable(
+    Map<int, Map<String, dynamic>> studentScoresMap, {
+    String language = 'id',
+  }) {
+    final isEnglish = language == 'en';
     if (studentScoresMap.isEmpty) {
-      return [['No', 'NIM', 'Nama', 'Keterangan']];
+      return [[
+        'No',
+        isEnglish ? 'Student ID' : 'NIM',
+        isEnglish ? 'Name' : 'Nama',
+        isEnglish ? 'Notes' : 'Keterangan',
+      ]];
     }
 
     // Get all unique CPL IDs and sort them
@@ -891,8 +1007,13 @@ class CPLCPMKPDFGenerator {
       ..sort((a, b) => (int.tryParse(a) ?? 0).compareTo(int.tryParse(b) ?? 0));
 
     // Build header
-    final headers = ['No', 'NIM', 'Nama'];
-    headers.addAll(sortedCplIds.map((id) => 'CPL.$id'));
+    final ploPrefix = isEnglish ? 'PLO' : 'CPL';
+    final headers = [
+      'No',
+      isEnglish ? 'Student ID' : 'NIM',
+      isEnglish ? 'Name' : 'Nama',
+    ];
+    headers.addAll(sortedCplIds.map((id) => '$ploPrefix.$id'));
     final rows = <List<String>>[headers];
 
     // Sort students by NIM
@@ -928,9 +1049,19 @@ class CPLCPMKPDFGenerator {
   }
 
   /// Helper: Build angkatan detail table
-  static List<List<String>> _buildAngkatanDetailTable(Map<int, Map<String, dynamic>> studentScoresMap) {
+  static List<List<String>> _buildAngkatanDetailTable(
+    Map<int, Map<String, dynamic>> studentScoresMap, {
+    String language = 'id',
+  }) {
+    final isEnglish = language == 'en';
     final rows = <List<String>>[
-      ['No', 'NIM', 'Nama', 'Rata-Rata CPMK', 'Rata-Rata CPL'],
+      [
+        'No',
+        isEnglish ? 'Student ID' : 'NIM',
+        isEnglish ? 'Name' : 'Nama',
+        isEnglish ? 'Average CLO' : 'Rata-Rata CPMK',
+        isEnglish ? 'Average PLO' : 'Rata-Rata CPL',
+      ],
     ];
 
     if (studentScoresMap.isEmpty) {
@@ -979,10 +1110,26 @@ class CPLCPMKPDFGenerator {
   }
 
   /// Helper: Build angkatan CPL only table
-  static List<List<String>> _buildAngkatanCplOnlyTable(Map<int, Map<String, dynamic>> studentScoresMap) {
+  static List<List<String>> _buildAngkatanCplOnlyTable(
+    Map<int, Map<String, dynamic>> studentScoresMap, {
+    String language = 'id',
+  }) {
+    final isEnglish = language == 'en';
     // Build header: No, NIM, Nama, Nilai CPL.1, Nilai CPL.2, ... Nilai CPL.7
+    final ploPrefixLabel = isEnglish ? 'PLO' : 'Nilai CPL';
     final rows = <List<String>>[
-      ['No', 'NIM', 'Nama', 'Nilai CPL.1', 'Nilai CPL.2', 'Nilai CPL.3', 'Nilai CPL.4', 'Nilai CPL.5', 'Nilai CPL.6', 'Nilai CPL.7'],
+      [
+        'No',
+        isEnglish ? 'Student ID' : 'NIM',
+        isEnglish ? 'Name' : 'Nama',
+        '$ploPrefixLabel.1',
+        '$ploPrefixLabel.2',
+        '$ploPrefixLabel.3',
+        '$ploPrefixLabel.4',
+        '$ploPrefixLabel.5',
+        '$ploPrefixLabel.6',
+        '$ploPrefixLabel.7',
+      ],
     ];
 
     if (studentScoresMap.isEmpty) {

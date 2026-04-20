@@ -16,7 +16,7 @@ import '../models/cpmk_cpl_mapping_model.dart';
 
 class DatabaseHelper {
   static const String _dbName = 'cpl_app.db';
-  static const int _dbVersion = 8;
+  static const int _dbVersion = 9;
 
   // Table names
   static const String tableUsers = 'users';
@@ -580,6 +580,15 @@ class DatabaseHelper {
         print('INFO: Tabel cpl_hasil_perhitungan berhasil dibuat');
       } catch (e) {
         print('Note: CPL results table might already exist: $e');
+      }
+    }
+    if (oldVersion < 9) {
+      // Add mk_eng column to matakuliah table
+      try {
+        await db.execute('ALTER TABLE $tableMatakuliah ADD COLUMN mk_eng TEXT');
+        print('INFO: Kolom mk_eng berhasil ditambahkan ke tabel matakuliah');
+      } catch (e) {
+        print('Note: Kolom mk_eng mungkin sudah ada: $e');
       }
     }
   }

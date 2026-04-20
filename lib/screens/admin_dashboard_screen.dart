@@ -329,6 +329,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         // 5: import
         _EmbeddedImportContent(
           context: context,
+          dbHelper: _dbHelper,
           onMahasiswaImport: _handleMahasiswaImportClick,
           onMatakuliahImport: _handleMatakuliahImportClick,
         ),
@@ -4043,11 +4044,13 @@ class _RPSExportScreenState extends State<_RPSExportScreen> {
 
 class _EmbeddedImportContent extends StatelessWidget {
   final BuildContext context;
+  final DatabaseHelper dbHelper;
   final VoidCallback onMahasiswaImport;
   final VoidCallback onMatakuliahImport;
 
   const _EmbeddedImportContent({
     required this.context,
+    required this.dbHelper,
     required this.onMahasiswaImport,
     required this.onMatakuliahImport,
   });
@@ -4059,419 +4062,337 @@ class _EmbeddedImportContent extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Import Data',
-            style: TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.bold,
-              color: AppColors.primary,
+          // Header
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Import Data Sistem',
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.primary,
+                ),
+              ),
+              const SizedBox(height: AppSpacing.sm),
+              Text(
+                'Kelola semua data dengan mengimpor file Excel atau CSV',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: Colors.grey[600],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.xl),
+          
+          // ==================== DATA MASTER ====================
+          _buildSectionHeader('📚 Data Master', 'Informasi dasar sistem akademik'),
+          const SizedBox(height: AppSpacing.md),
+          Row(
+            children: [
+              Expanded(
+                child: _buildImportCard(
+                  icon: Icons.person,
+                  title: 'Mahasiswa',
+                  description: 'Data mahasiswa dan identitas',
+                  color: const Color(0xFF8E44AD),
+                  onPressed: onMahasiswaImport,
+                ),
+              ),
+              const SizedBox(width: AppSpacing.lg),
+              Expanded(
+                child: _buildImportCard(
+                  icon: Icons.book,
+                  title: 'Matakuliah',
+                  description: 'Data mata kuliah program studi',
+                  color: const Color(0xFF16A085),
+                  onPressed: onMatakuliahImport,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.xl),
+          
+          // ==================== LEARNING OUTCOMES ====================
+          _buildSectionHeader('🎯 Capaian Pembelajaran', 'CPL (Lulusan) dan CPMK (Mata Kuliah)'),
+          const SizedBox(height: AppSpacing.md),
+          Row(
+            children: [
+              Expanded(
+                child: _buildImportCard(
+                  icon: Icons.flag,
+                  title: 'CPL',
+                  description: 'Capaian Pembelajaran Lulusan',
+                  color: const Color(0xFF2980B9),
+                  onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => const ExcelImportScreen(
+                        initialImportType: 'cpl',
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: AppSpacing.lg),
+              Expanded(
+                child: _buildImportCard(
+                  icon: Icons.dashboard,
+                  title: 'CPMK',
+                  description: 'Capaian Program Mata Kuliah',
+                  color: const Color(0xFFE74C3C),
+                  onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => const ExcelImportScreen(
+                        initialImportType: 'cpmk',
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.md),
+          Row(
+            children: [
+              Expanded(
+                child: _buildImportCard(
+                  icon: Icons.layers,
+                  title: 'Sub CPMK',
+                  description: 'Sub Capaian Pembelajaran',
+                  color: const Color(0xFF9B59B6),
+                  onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => const ExcelImportScreen(
+                        initialImportType: 'sub_cpmk',
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: AppSpacing.lg),
+              Expanded(
+                child: _buildImportCard(
+                  icon: Icons.description,
+                  title: 'RPS',
+                  description: 'Rencana Pembelajaran Semester',
+                  color: const Color(0xFF27AE60),
+                  onPressed: () => Navigator.pushNamed(
+                    context,
+                    '/rps_template_import',
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.xl),
+          
+          // ==================== ASSESSMENT & VALUES ====================
+          _buildSectionHeader('📊 Penilaian & Nilai', 'Data prestasi mahasiswa'),
+          const SizedBox(height: AppSpacing.md),
+          Row(
+            children: [
+              Expanded(
+                child: _buildImportCard(
+                  icon: Icons.assessment,
+                  title: 'Nilai (Standar)',
+                  description: 'Import nilai per mata kuliah',
+                  color: const Color(0xFFF39C12),
+                  onPressed: () => Navigator.pushNamed(
+                    context,
+                    '/nilai_batch_import',
+                  ),
+                ),
+              ),
+              const SizedBox(width: AppSpacing.lg),
+              Expanded(
+                child: _buildImportCard(
+                  icon: Icons.batch_prediction,
+                  title: 'Nilai (Validasi)',
+                  description: 'Import nilai dengan validasi',
+                  color: const Color(0xFF8E44AD),
+                  onPressed: () => Navigator.pushNamed(
+                    context,
+                    '/nilai_batch_import',
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.xl),
+          
+          // ==================== UTILITIES ====================
+          _buildSectionHeader('🛠️ Utilitas', 'Alat pendukung sistem'),
+          const SizedBox(height: AppSpacing.md),
+          Row(
+            children: [
+              Expanded(
+                child: _buildImportCard(
+                  icon: Icons.translate,
+                  title: 'Translate Nama MK',
+                  description: 'Nama mata kuliah dalam bahasa inggris',
+                  color: const Color(0xFF3498DB),
+                  onPressed: () => Navigator.pushNamed(
+                    context,
+                    '/translate_matakuliah',
+                    arguments: dbHelper,
+                  ),
+                ),
+              ),
+              const SizedBox(width: AppSpacing.lg),
+              const Expanded(child: SizedBox()),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.xl),
+          
+          // ==================== TIPS ====================
+          Container(
+            padding: const EdgeInsets.all(AppSpacing.md),
+            decoration: BoxDecoration(
+              color: Colors.blue[50],
+              borderRadius: BorderRadius.circular(AppRadius.md),
+              border: Border.all(color: Colors.blue[200]!),
             ),
-          ),
-          const SizedBox(height: AppSpacing.lg),
-          // Import Options Grid
-          Row(
-            children: [
-              Expanded(
-                child: Card(
-                  elevation: 2,
-                  child: Padding(
-                    padding: const EdgeInsets.all(AppSpacing.lg),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.person, size: 40, color: const Color(0xFF8E44AD)),
-                        const SizedBox(height: AppSpacing.md),
-                        const Text(
-                          'Import Mahasiswa',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(AppSpacing.sm),
+                  decoration: BoxDecoration(
+                    color: Colors.blue[100],
+                    borderRadius: BorderRadius.circular(AppRadius.sm),
+                  ),
+                  child: Icon(Icons.lightbulb, color: Colors.blue[900], size: 20),
+                ),
+                const SizedBox(width: AppSpacing.md),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Tips Import Data',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 13,
+                          color: Colors.blue[900],
                         ),
-                        const SizedBox(height: AppSpacing.sm),
-                        Text(
-                          'Import data mahasiswa dari file Excel/CSV',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                      ),
+                      const SizedBox(height: AppSpacing.sm),
+                      Text(
+                        '• Gunakan template Excel yang telah disediakan\n• Format file: .xlsx, .xls, atau .csv\n• Pastikan data lengkap sebelum import\n• Validasi dilakukan otomatis saat upload',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.blue[800],
+                          height: 1.5,
                         ),
-                        const SizedBox(height: AppSpacing.md),
-                        ElevatedButton.icon(
-                          onPressed: onMahasiswaImport,
-                          icon: const Icon(Icons.upload_file, size: 18),
-                          label: const Text('Import'),
-                          style: ElevatedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: AppSpacing.md,
-                              vertical: AppSpacing.sm,
-                            ),
-                            backgroundColor: const Color(0xFF8E44AD),
-                          ),
-                        ),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
                 ),
-              ),
-              const SizedBox(width: AppSpacing.lg),
-              Expanded(
-                child: Card(
-                  elevation: 2,
-                  child: Padding(
-                    padding: const EdgeInsets.all(AppSpacing.lg),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.book, size: 40, color: const Color(0xFF16A085)),
-                        const SizedBox(height: AppSpacing.md),
-                        const Text(
-                          'Import Matakuliah',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-                        ),
-                        const SizedBox(height: AppSpacing.sm),
-                        Text(
-                          'Import data matakuliah dari file Excel/CSV',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                        ),
-                        const SizedBox(height: AppSpacing.md),
-                        ElevatedButton.icon(
-                          onPressed: onMatakuliahImport,
-                          icon: const Icon(Icons.upload_file, size: 18),
-                          label: const Text('Import'),
-                          style: ElevatedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: AppSpacing.md,
-                              vertical: AppSpacing.sm,
-                            ),
-                            backgroundColor: const Color(0xFF16A085),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: AppSpacing.lg),
-          // Import CPL dan CPMK
-          Row(
-            children: [
-              Expanded(
-                child: Card(
-                  elevation: 2,
-                  child: Padding(
-                    padding: const EdgeInsets.all(AppSpacing.lg),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.flag, size: 40, color: const Color(0xFF2980B9)),
-                        const SizedBox(height: AppSpacing.md),
-                        const Text(
-                          'Import CPL',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-                        ),
-                        const SizedBox(height: AppSpacing.sm),
-                        Text(
-                          'Import Capaian Pembelajaran Lulusan',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                        ),
-                        const SizedBox(height: AppSpacing.md),
-                        ElevatedButton.icon(
-                          onPressed: () => Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => const ExcelImportScreen(
-                                initialImportType: 'cpl',
-                              ),
-                            ),
-                          ),
-                          icon: const Icon(Icons.upload_file, size: 18),
-                          label: const Text('Import'),
-                          style: ElevatedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: AppSpacing.md,
-                              vertical: AppSpacing.sm,
-                            ),
-                            backgroundColor: const Color(0xFF2980B9),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(width: AppSpacing.lg),
-              Expanded(
-                child: Card(
-                  elevation: 2,
-                  child: Padding(
-                    padding: const EdgeInsets.all(AppSpacing.lg),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.dashboard, size: 40, color: const Color(0xFFE74C3C)),
-                        const SizedBox(height: AppSpacing.md),
-                        const Text(
-                          'Import CPMK',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-                        ),
-                        const SizedBox(height: AppSpacing.sm),
-                        Text(
-                          'Import Capaian Program Keahlian Mata Kuliah',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                        ),
-                        const SizedBox(height: AppSpacing.md),
-                        ElevatedButton.icon(
-                          onPressed: () => Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => const ExcelImportScreen(
-                                initialImportType: 'cpmk',
-                              ),
-                            ),
-                          ),
-                          icon: const Icon(Icons.upload_file, size: 18),
-                          label: const Text('Import'),
-                          style: ElevatedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: AppSpacing.md,
-                              vertical: AppSpacing.sm,
-                            ),
-                            backgroundColor: const Color(0xFFE74C3C),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: AppSpacing.lg),
-          // Import Sub CPMK dan Nilai Detail
-          Row(
-            children: [
-              Expanded(
-                child: Card(
-                  elevation: 2,
-                  child: Padding(
-                    padding: const EdgeInsets.all(AppSpacing.lg),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.layers, size: 40, color: const Color(0xFF9B59B6)),
-                        const SizedBox(height: AppSpacing.md),
-                        const Text(
-                          'Import Sub CPMK',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-                        ),
-                        const SizedBox(height: AppSpacing.sm),
-                        Text(
-                          'Import Sub Capaian Pembelajaran per Mata Kuliah',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                        ),
-                        const SizedBox(height: AppSpacing.md),
-                        ElevatedButton.icon(
-                          onPressed: () => Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => const ExcelImportScreen(
-                                initialImportType: 'sub_cpmk',
-                              ),
-                            ),
-                          ),
-                          icon: const Icon(Icons.upload_file, size: 18),
-                          label: const Text('Import'),
-                          style: ElevatedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: AppSpacing.md,
-                              vertical: AppSpacing.sm,
-                            ),
-                            backgroundColor: const Color(0xFF9B59B6),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(width: AppSpacing.lg),
-              Expanded(
-                child: Card(
-                  elevation: 2,
-                  child: Padding(
-                    padding: const EdgeInsets.all(AppSpacing.lg),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.description, size: 40, color: const Color(0xFF27AE60)),
-                        const SizedBox(height: AppSpacing.md),
-                        const Text(
-                          'Import RPS',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-                        ),
-                        const SizedBox(height: AppSpacing.sm),
-                        Text(
-                          'Import RPS (Rencana Pembelajaran Semester) dari Excel',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                        ),
-                        const SizedBox(height: AppSpacing.md),
-                        ElevatedButton.icon(
-                          onPressed: () => Navigator.pushNamed(
-                            context,
-                            '/rps_template_import',
-                          ),
-                          icon: const Icon(Icons.upload_file, size: 18),
-                          label: const Text('Import'),
-                          style: ElevatedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: AppSpacing.md,
-                              vertical: AppSpacing.sm,
-                            ),
-                            backgroundColor: const Color(0xFF27AE60),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: AppSpacing.lg),
-          // Import Nilai (Batch)
-          Row(
-            children: [
-              Expanded(
-                child: Card(
-                  elevation: 2,
-                  child: Padding(
-                    padding: const EdgeInsets.all(AppSpacing.lg),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.assessment, size: 40, color: const Color(0xFFF39C12)),
-                        const SizedBox(height: AppSpacing.md),
-                        const Text(
-                          'Import Nilai',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-                        ),
-                        const SizedBox(height: AppSpacing.sm),
-                        Text(
-                          'Import nilai mahasiswa dari file Excel/CSV masal',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                        ),
-                        const SizedBox(height: AppSpacing.md),
-                        ElevatedButton.icon(
-                          onPressed: () => Navigator.pushNamed(
-                            context,
-                            '/nilai_batch_import',
-                          ),
-                          icon: const Icon(Icons.upload_file, size: 18),
-                          label: const Text('Import'),
-                          style: ElevatedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: AppSpacing.md,
-                              vertical: AppSpacing.sm,
-                            ),
-                            backgroundColor: const Color(0xFFF39C12),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(width: AppSpacing.lg),
-              const SizedBox(width: AppSpacing.lg),
-              Expanded(
-                child: Card(
-                  elevation: 2,
-                  child: Padding(
-                    padding: const EdgeInsets.all(AppSpacing.lg),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.batch_prediction, size: 40, color: const Color(0xFF8E44AD)),
-                        const SizedBox(height: AppSpacing.md),
-                        const Text(
-                          'Import Nilai Batch',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-                        ),
-                        const SizedBox(height: AppSpacing.sm),
-                        Text(
-                          'Import nilai mahasiswa dari file Excel/CSV dengan validasi',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                        ),
-                        const SizedBox(height: AppSpacing.md),
-                        ElevatedButton.icon(
-                          onPressed: () => Navigator.pushNamed(
-                            context,
-                            '/nilai_batch_import',
-                          ),
-                          icon: const Icon(Icons.upload_file, size: 18),
-                          label: const Text('Import'),
-                          style: ElevatedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: AppSpacing.md,
-                              vertical: AppSpacing.sm,
-                            ),
-                            backgroundColor: const Color(0xFF8E44AD),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: AppSpacing.lg),
-          // Import Info Card
-          Card(
-            color: Colors.blue[50],
-            child: Padding(
-              padding: const EdgeInsets.all(AppSpacing.md),
-              child: Row(
-                children: [
-                  Icon(Icons.info, color: Colors.blue[900], size: 24),
-                  const SizedBox(width: AppSpacing.md),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Tips Import Data',
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            color: Colors.blue[900],
-                          ),
-                        ),
-                        const SizedBox(height: AppSpacing.sm),
-                        Text(
-                          '• Gunakan template Excel yang telah disediakan\n• Format file: .xlsx, .xls, atau .csv\n• Pastikan data lengkap sebelum import\n• Data akan disimpan di Downloads saat download template',
-                          style: TextStyle(fontSize: 12, color: Colors.blue[800]),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
+              ],
             ),
           ),
         ],
+      ),
+    );
+  }
+  
+  // Helper Widgets
+  Widget _buildSectionHeader(String title, String subtitle) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          title,
+          style: const TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+            color: AppColors.primary,
+          ),
+        ),
+        const SizedBox(height: AppSpacing.xs),
+        Text(
+          subtitle,
+          style: TextStyle(
+            fontSize: 12,
+            color: Colors.grey[600],
+          ),
+        ),
+      ],
+    );
+  }
+  
+  Widget _buildImportCard({
+    required IconData icon,
+    required String title,
+    required String description,
+    required Color color,
+    required VoidCallback onPressed,
+  }) {
+    return Card(
+      elevation: 1,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(AppRadius.md),
+        side: BorderSide(
+          color: color.withOpacity(0.2),
+          width: 1.5,
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpacing.md),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(AppSpacing.md),
+              decoration: BoxDecoration(
+                color: color.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(AppRadius.sm),
+              ),
+              child: Icon(icon, size: 32, color: color),
+            ),
+            const SizedBox(height: AppSpacing.md),
+            Text(
+              title,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: AppColors.primary,
+              ),
+            ),
+            const SizedBox(height: AppSpacing.xs),
+            Text(
+              description,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 11,
+                color: Colors.grey[600],
+                height: 1.3,
+              ),
+            ),
+            const SizedBox(height: AppSpacing.md),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: onPressed,
+                icon: const Icon(Icons.upload_file, size: 16),
+                label: const Text('Import'),
+                style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  backgroundColor: color,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(AppRadius.sm),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

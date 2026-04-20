@@ -21,7 +21,9 @@ import 'screens/assessment_type_screen.dart';
 import 'screens/cpmk_report_screen.dart';
 import 'screens/assessment_outcomes_screen.dart';
 import 'screens/nilai_batch_import_screen.dart';
+import 'screens/translate_matakuliah_screen.dart';
 import 'screens/placeholder_screens.dart';
+import 'services/database_helper.dart';
 
 void main() async {
   try {
@@ -114,6 +116,9 @@ class MyApp extends StatelessWidget {
         '/cpmk_report': (context) => const CPMKReportScreen(),
         '/assessment_outcomes': (context) => const AssessmentOutcomesScreen(),
         '/nilai_batch_import': (context) => const NilaiBatchImportScreen(),
+        '/translate_matakuliah': (context) => TranslateMatakuliahScreen(
+          dbHelper: ModalRoute.of(context)!.settings.arguments as DatabaseHelper,
+        ),
         '/export_data': (context) => const ExportDataScreen(),
       },
     );
