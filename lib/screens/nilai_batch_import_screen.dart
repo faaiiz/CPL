@@ -4,6 +4,7 @@ import 'package:excel/excel.dart' as excel_lib;
 import 'dart:io';
 import '../constants/app_constants.dart';
 import '../services/excel_import_service.dart';
+import '../services/excel_template_service.dart';
 
 class NilaiBatchImportScreen extends StatefulWidget {
   const NilaiBatchImportScreen({super.key});
@@ -124,6 +125,53 @@ class _NilaiBatchImportScreenState extends State<NilaiBatchImportScreen> {
       _selectedFilePaths = [];
       _selectedFileNames = [];
     });
+  }
+
+  Future<void> _downloadTemplate() async {
+    try {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Membuat template...'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+
+      final filePath = await ExcelTemplateService.generateNilaiImportTemplate();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('✓ Template berhasil dibuat: $filePath'),
+            backgroundColor: AppColors.success,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+
+        // Open the file
+        try {
+          await ExcelTemplateService.openFile(filePath);
+        } catch (e) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Template disimpan di: $filePath'),
+                duration: const Duration(seconds: 4),
+              ),
+            );
+          }
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: $e'),
+            backgroundColor: AppColors.danger,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    }
   }
 
   Future<void> _importData() async {
@@ -303,6 +351,19 @@ class _NilaiBatchImportScreenState extends State<NilaiBatchImportScreen> {
                         fontSize: 11,
                         color: AppColors.secondary,
                         fontStyle: FontStyle.italic,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: AppSpacing.md),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: _downloadTemplate,
+                      icon: const Icon(Icons.download, size: 18),
+                      label: const Text('Download Template'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppColors.success,
+                        side: const BorderSide(color: AppColors.success),
                       ),
                     ),
                   ),

@@ -88,6 +88,7 @@ class DatabaseHelper {
       
       // Pastikan semua kolom ada
       await _ensureRPSDetailColumns(db);
+      await _ensureMatakuliahColumns(db);
       
       // 🎯 PENTING: Ensure CPL results table exists (untuk prevent error saat save)
       await _ensureCPLResultsTable(db);
@@ -610,6 +611,26 @@ class DatabaseHelper {
       }
     } catch (e) {
       print('WARNING: Error checking table columns: $e');
+    }
+  }
+
+  // Helper method untuk memastikan kolom mk_eng ada di tabel matakuliah
+  Future<void> _ensureMatakuliahColumns(Database db) async {
+    try {
+      // Cek apakah kolom mk_eng sudah ada
+      final tableInfo = await db.rawQuery('PRAGMA table_info($tableMatakuliah)');
+      final hasMkEngColumn = 
+          tableInfo.any((col) => col['name'] == 'mk_eng');
+      
+      if (!hasMkEngColumn) {
+        print('INFO: Kolom mk_eng tidak ditemukan di tabel matakuliah, menambahkan...');
+        await db.execute('ALTER TABLE $tableMatakuliah ADD COLUMN mk_eng TEXT');
+        print('✅ INFO: Kolom mk_eng berhasil ditambahkan ke tabel matakuliah via helper');
+      } else {
+        print('INFO: Kolom mk_eng sudah ada di tabel matakuliah');
+      }
+    } catch (e) {
+      print('WARNING: Error checking matakuliah table columns: $e');
     }
   }
 

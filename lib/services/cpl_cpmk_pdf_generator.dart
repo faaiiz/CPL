@@ -45,7 +45,7 @@ class CPLCPMKPDFGenerator {
     // Load logo from assets (if exists)
     Uint8List? logoBytes;
     try {
-      logoBytes = (await rootBundle.load('assets/logo.png')).buffer.asUint8List();
+      logoBytes = (await rootBundle.load('assets/logocpl.png')).buffer.asUint8List();
     } catch (e) {
       // Logo not found, continue without it
     }
@@ -526,7 +526,7 @@ class CPLCPMKPDFGenerator {
     // Load logo from assets
     Uint8List? logoBytes;
     try {
-      logoBytes = (await rootBundle.load('assets/logo.png')).buffer.asUint8List();
+      logoBytes = (await rootBundle.load('assets/logocpl.png')).buffer.asUint8List();
     } catch (e) {
       // Logo not found, continue without it
     }
@@ -705,7 +705,7 @@ class CPLCPMKPDFGenerator {
     // Load logo from assets
     Uint8List? logoBytes;
     try {
-      logoBytes = (await rootBundle.load('assets/logo.png')).buffer.asUint8List();
+      logoBytes = (await rootBundle.load('assets/logocpl.png')).buffer.asUint8List();
     } catch (e) {
       // Logo not found
     }
