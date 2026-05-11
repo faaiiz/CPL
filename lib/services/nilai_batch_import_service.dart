@@ -144,7 +144,7 @@ class NilaiBatchImportService {
         if (row.isNotEmpty) {
           final firstCol = row[0]?.toString().trim().toUpperCase() ?? '';
 
-          // Ambil info Nama Matakuliah
+          // Ambil info Nama Matakuliah dari B2 (row index 1, column 1)
           if (i == 1 && row.length > 1) {
             final firstColText = row[0]?.toString().trim() ?? '';
             if (firstColText.contains('Nama Matakuliah') ||
@@ -159,6 +159,13 @@ class NilaiBatchImportService {
             break;
           }
         }
+      }
+
+      // 🎯 VALIDASI B2: Wajib ada dan harus sesuai dengan database
+      if (namaMatakuliahFromTemplate == null || namaMatakuliahFromTemplate.isEmpty) {
+        results['success'] = false;
+        results['errors'].add('❌ ERROR: Cell B2 (Kode Matakuliah) wajib diisi dan tidak boleh kosong');
+        return results;
       }
 
       final nilaiList = <Nilai>[];
@@ -274,25 +281,33 @@ class NilaiBatchImportService {
             mahasiswa = mahasiswa.copyWith(id: mahasiswaId);
           }
 
-          // Tentukan kode dan nama matakuliah
-          String kodeMatakuliah = _extractMatakuliahKode(
-              namaMatakuliahFromTemplate ?? 'MK_${DateTime.now().millisecondsSinceEpoch}');
-          String namaMatakuliah = namaMatakuliahFromTemplate ?? 'Unnamed Course';
+          // Tentukan kode dan nama matakuliah dari B2
+          String kodeMatakuliah = _extractMatakuliahKode(namaMatakuliahFromTemplate);
+          String namaMatakuliah = namaMatakuliahFromTemplate;
 
-          // Cek dan tambahkan matakuliah jika belum ada
+          // 🎯 VALIDASI: Cek apakah matakuliah dengan kode ini ada di database
           var matakuliah = await _dbHelper.getMatakuliahByKode(kodeMatakuliah);
+          
+          // Jika tidak ditemukan dengan kode yang diekstrak, coba cari dengan nama lengkap
           if (matakuliah == null) {
-            matakuliah = Matakuliah(
-              kode: kodeMatakuliah,
-              nama: namaMatakuliah,
-              sks: 3,
-              semester: '1',
-              jenis: 'wajib',
-              createdAt: DateTime.now(),
+            // Coba cari di semua matakuliah dengan nama yang cocok
+            final allMatakuliah = await _dbHelper.getAllMatakuliah();
+            matakuliah = allMatakuliah.firstWhere(
+              (mk) => mk.nama.toLowerCase().contains(namaMatakuliah.toLowerCase()) ||
+                  mk.kode.toLowerCase() == namaMatakuliah.toLowerCase(),
+              orElse: () => null as dynamic,
+            ) as Matakuliah?;
+          }
+
+          // ❌ Jika masih tidak ditemukan, REJECT dengan error
+          if (matakuliah == null) {
+            results['errors'].add(
+              '❌ ERROR File: Kode Matakuliah "$namaMatakuliah" (B2) TIDAK DITEMUKAN di database. '
+              'Gunakan kode matakuliah yang sudah terdaftar dalam sistem.',
             );
-            final matakuliahId =
-                await _dbHelper.insertMatakuliah(matakuliah);
-            matakuliah = matakuliah.copyWith(id: matakuliahId);
+            results['success'] = false;
+            // Hentikan import file ini - jangan lanjut ke baris data
+            return results;
           }
 
           // Buat nilai

@@ -5,6 +5,7 @@ import 'dart:io';
 import '../constants/app_constants.dart';
 import '../services/excel_import_service.dart';
 import '../services/excel_template_service.dart';
+import '../services/database_helper.dart';
 
 class NilaiBatchImportScreen extends StatefulWidget {
   const NilaiBatchImportScreen({super.key});
@@ -16,6 +17,7 @@ class NilaiBatchImportScreen extends StatefulWidget {
 
 class _NilaiBatchImportScreenState extends State<NilaiBatchImportScreen> {
   final _excelImportService = ExcelImportService();
+  final _dbHelper = DatabaseHelper();
 
   // State variables
   List<String> _selectedFilePaths = [];
@@ -33,7 +35,7 @@ class _NilaiBatchImportScreenState extends State<NilaiBatchImportScreen> {
     // No initialization needed - will read from Excel file
   }
 
-  /// Validasi B1 (Kode Matakuliah) dan B3 (Tahun Ajaran) dari Excel file
+  /// Validasi B1 (Kode Matakuliah), B2 (Nama Matakuliah), dan B3 (Tahun Ajaran) dari Excel file
   Future<Map<String, dynamic>> _validateExcelHeaders(String filePath) async {
     try {
       final bytes = await File(filePath).readAsBytes();
@@ -41,13 +43,22 @@ class _NilaiBatchImportScreenState extends State<NilaiBatchImportScreen> {
       final sheet = excel.tables.values.first;
 
       // Baca B1 - Kode Matakuliah
+      // Baca B2 - Nama Matakuliah
+      // Baca B3 - Tahun Ajaran
       String? kodeMatakuliahFromExcel;
+      String? namaMatakuliahFromExcel;
       String? tahunAjaranFromExcel;
 
       // Cell B1 (row 0, col 1)
       if (sheet.rows.length > 0 && sheet.rows[0].length > 1) {
         final cellB1 = sheet.rows[0][1];
         kodeMatakuliahFromExcel = cellB1?.value?.toString().trim();
+      }
+
+      // Cell B2 (row 1, col 1)
+      if (sheet.rows.length > 1 && sheet.rows[1].length > 1) {
+        final cellB2 = sheet.rows[1][1];
+        namaMatakuliahFromExcel = cellB2?.value?.toString().trim();
       }
 
       // Cell B3 (row 2, col 1)
@@ -65,6 +76,46 @@ class _NilaiBatchImportScreenState extends State<NilaiBatchImportScreen> {
         };
       }
 
+      // 🎯 NEW: Cek apakah matakuliah dengan kode ini ada di database
+      final matakuliah = await _dbHelper.getMatakuliahByKode(kodeMatakuliahFromExcel);
+      if (matakuliah == null) {
+        return {
+          'error': '❌ ERROR: Kode Matakuliah "$kodeMatakuliahFromExcel" (B1) TIDAK DITEMUKAN di database.\n'
+              'Gunakan kode matakuliah yang sudah terdaftar dalam sistem.',
+          'type': 'matakuliah',
+          'success': false,
+        };
+      }
+
+      // 🎯 NEW: Validasi B2 - Nama Matakuliah (wajib ada di database)
+      if (namaMatakuliahFromExcel == null || namaMatakuliahFromExcel.isEmpty) {
+        return {
+          'error': 'Nama Matakuliah di B2 kosong',
+          'type': 'nama_matakuliah',
+          'success': false,
+        };
+      }
+
+      // 🎯 NEW: Cek apakah nama matakuliah ada di database
+      // Coba cari dengan getMatakuliahByKode dulu (case B2 adalah nama yang sama dengan B1)
+      // atau cari di semua matakuliah dengan flexible search
+      final allMatakuliah = await _dbHelper.getAllMatakuliah();
+      final searchTerm = namaMatakuliahFromExcel.toLowerCase();
+      final namaMatakuliahExists = allMatakuliah.any((mk) {
+        final kodeLower = mk.kode.toLowerCase();
+        final namaLower = mk.nama.toLowerCase();
+        return kodeLower.contains(searchTerm) || namaLower.contains(searchTerm);
+      });
+
+      if (!namaMatakuliahExists) {
+        return {
+          'error': '❌ ERROR: Nama/Kode Matakuliah "$namaMatakuliahFromExcel" (B2) TIDAK DITEMUKAN di database.\n'
+              'Gunakan kode atau nama matakuliah yang sudah terdaftar dalam sistem.',
+          'type': 'nama_matakuliah',
+          'success': false,
+        };
+      }
+
       // Validasi B3 - Tahun Ajaran
       if (tahunAjaranFromExcel == null || tahunAjaranFromExcel.isEmpty) {
         return {
@@ -74,9 +125,29 @@ class _NilaiBatchImportScreenState extends State<NilaiBatchImportScreen> {
         };
       }
 
+      // 🎯 NEW: Validasi format Tahun Ajaran - harus berupa angka 4 digit
+      final tahunInt = int.tryParse(tahunAjaranFromExcel);
+      if (tahunInt == null) {
+        return {
+          'error': '❌ ERROR: Tahun Ajaran di B3 harus berupa angka (contoh: 2024)',
+          'type': 'tahun',
+          'success': false,
+        };
+      }
+
+      // 🎯 NEW: Validasi range tahun ajaran - wajar antara 2000-2100
+      if (tahunInt < 2000 || tahunInt > 2100) {
+        return {
+          'error': '❌ ERROR: Tahun Ajaran di B3 harus dalam range 2000-2100. Nilai saat ini: $tahunInt',
+          'type': 'tahun',
+          'success': false,
+        };
+      }
+
       return {
         'success': true,
         'kodeMatakuliah': kodeMatakuliahFromExcel,
+        'namaMatakuliah': namaMatakuliahFromExcel,
         'tahunAjaran': tahunAjaranFromExcel,
       };
     } catch (e) {
@@ -207,7 +278,12 @@ class _NilaiBatchImportScreenState extends State<NilaiBatchImportScreen> {
             await _validateExcelHeaders(filePath);
 
         if (!validationResult['success']) {
-          allErrors.add('❌ $fileName: ${validationResult['error']}');
+          allErrors.add('📄 ═══════════════════════════════════════');
+          allErrors.add('   FILE: $fileName');
+          allErrors.add('   Status: ❌ VALIDASI GAGAL');
+          allErrors.add('═══════════════════════════════════════');
+          allErrors.add('   ${validationResult['error']}');
+          allErrors.add('');
           totalFailed++;
           continue;
         }
@@ -226,12 +302,25 @@ class _NilaiBatchImportScreenState extends State<NilaiBatchImportScreen> {
 
           if (result['errors'] != null) {
             final errors = result['errors'] as List<dynamic>;
-            allErrors.add('✓ $fileName: ${errors.length} error(s)');
+            // ✅ Tampilkan header file dan SEMUA error detail
+            allErrors.add('📄 ═══════════════════════════════════════');
+            allErrors.add('   FILE: $fileName');
+            allErrors.add('   Total Error: ${errors.length}');
+            allErrors.add('═══════════════════════════════════════');
+            
+            // 🔍 Tambahkan semua error detail
+            for (int errorIdx = 0; errorIdx < errors.length; errorIdx++) {
+              final errorMsg = errors[errorIdx].toString();
+              allErrors.add('   ${errorIdx + 1}. $errorMsg');
+            }
+            allErrors.add(''); // Spasi antar file
           } else {
             successCount++;
           }
         } catch (e) {
-          allErrors.add('❌ $fileName: Error - $e');
+          allErrors.add('❌ FILE: $fileName');
+          allErrors.add('   Error: $e');
+          allErrors.add('');
           totalFailed++;
         }
       }
@@ -702,7 +791,7 @@ class _NilaiBatchImportScreenState extends State<NilaiBatchImportScreen> {
             if (_importErrors.isNotEmpty) ...[
               const SizedBox(height: AppSpacing.lg),
               const Text(
-                'Error Log (Sampel):',
+                'Error Log Lengkap:',
                 style: TextStyle(
                   fontWeight: FontWeight.bold,
                   color: AppColors.danger,
@@ -710,51 +799,62 @@ class _NilaiBatchImportScreenState extends State<NilaiBatchImportScreen> {
               ),
               const SizedBox(height: AppSpacing.md),
               ConstrainedBox(
-                constraints: const BoxConstraints(maxHeight: 250),
+                constraints: const BoxConstraints(maxHeight: 400),
                 child: Container(
                   padding: const EdgeInsets.all(AppSpacing.md),
                   decoration: BoxDecoration(
                     color: Colors.grey.shade100,
                     borderRadius: BorderRadius.circular(AppRadius.md),
+                    border: Border.all(
+                      color: Colors.red[200]!,
+                      width: 1,
+                    ),
                   ),
                   child: SingleChildScrollView(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
-                      children: _importErrors
-                          .take(20)
-                          .map(
-                            (error) => Padding(
-                              padding: const EdgeInsets.symmetric(
-                                vertical: AppSpacing.sm,
-                              ),
-                              child: Text(
-                                '• $error',
-                                style: const TextStyle(
-                                  fontSize: 11,
-                                  color: AppColors.danger,
-                                ),
-                              ),
+                      children: [
+                        // 🎯 Tampilkan SEMUA error (tidak ada .take() limit)
+                        ..._importErrors.map(
+                          (error) => Padding(
+                            padding: const EdgeInsets.symmetric(
+                              vertical: AppSpacing.xs,
                             ),
-                          )
-                          .toList(),
+                            child: Text(
+                              error.contains('FILE:') || error.contains('═')
+                                  ? error // Header file ditampilkan bold/special
+                                  : '  $error',
+                              style: TextStyle(
+                                fontSize: 10,
+                                color: error.contains('❌') 
+                                    ? Colors.red[700]
+                                    : error.contains('📄')
+                                        ? Colors.blue[700]
+                                        : Colors.grey[700],
+                                fontFamily: 'Courier', // Monospace font untuk alignment
+                                fontWeight: error.contains('FILE:') || error.contains('Total Error') ? FontWeight.bold : FontWeight.normal,
+                              ),
+                              maxLines: null,
+                              softWrap: true,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ),
               ),
-              if (_importErrors.length > 20)
-                Padding(
-                  padding: const EdgeInsets.only(
-                    top: AppSpacing.md,
-                  ),
-                  child: Text(
-                    'Total ${_importErrors.length} error (tampil 20)',
-                    style: const TextStyle(
-                      fontSize: 11,
-                      color: AppColors.danger,
-                      fontStyle: FontStyle.italic,
-                    ),
+              Padding(
+                padding: const EdgeInsets.only(top: AppSpacing.md),
+                child: Text(
+                  'Total: ${_importErrors.length} baris error ditampilkan lengkap',
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: AppColors.danger,
+                    fontStyle: FontStyle.italic,
                   ),
                 ),
+              ),
             ],
 
             const SizedBox(height: AppSpacing.lg),

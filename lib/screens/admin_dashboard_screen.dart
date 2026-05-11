@@ -9,6 +9,7 @@ import '../models/sub_cpmk_model.dart';
 import '../services/database_helper.dart';
 import '../services/rps_pdf_generator.dart';
 import '../services/obe_calculation_helper.dart';
+import '../services/cpl_cpmk_pdf_generator.dart';
 import './cpmk_master_screen.dart';
 import './excel_import_screen.dart';
 import './nilai_batch_import_screen.dart';
@@ -1421,6 +1422,10 @@ class _EmbeddedHitungCPLContentState extends State<_EmbeddedHitungCPLContent>
 
   Future<List<Map<String, dynamic>>>? _matakuliahWithNilaiList;
   
+  // 🎯 Filter tahun ajaran
+  int? _selectedTahunAjaran;
+  Set<int> _availableTahunAjaran = {};
+  
   // 🎯 Track timeout state (used for debugging timeout scenarios)
   // ignore: unused_field
   bool _dataLoadTimeout = false;
@@ -2463,6 +2468,19 @@ class _EmbeddedHitungCPLContentState extends State<_EmbeddedHitungCPLContent>
               print('   └─ ${item['matakuliah_kode']} ${item['matakuliah_nama']} (${item['tahun_ajaran']})');
             }
             
+            // 🎯 Extract available tahun ajaran from data
+            final tahunAjaranSet = <int>{};
+            for (final item in data) {
+              tahunAjaranSet.add(item['tahun_ajaran'] as int);
+            }
+            _availableTahunAjaran = tahunAjaranSet;
+            
+            // 🎯 Filter data berdasarkan tahun ajaran yang dipilih
+            List<Map<String, dynamic>> filteredData = data;
+            if (_selectedTahunAjaran != null) {
+              filteredData = data.where((item) => item['tahun_ajaran'] == _selectedTahunAjaran).toList();
+            }
+            
             if (data.isEmpty) {
               return Container(
                 padding: const EdgeInsets.all(AppSpacing.lg),
@@ -2487,9 +2505,98 @@ class _EmbeddedHitungCPLContentState extends State<_EmbeddedHitungCPLContent>
             }
             
             // 🔍 DEBUG: Info badge di tabel
-            print('✅ Will render ${data.length} rows');
+            print('✅ Will render ${filteredData.length} rows');
 
-            return Container(
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // 🎯 Filter Tab Tahun Ajaran
+                if (_availableTahunAjaran.isNotEmpty)
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Filter Tahun Ajaran:',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey[600],
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      const SizedBox(height: AppSpacing.sm),
+                      SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(
+                          children: [
+                            // 🎯 Button "Semua Tahun"
+                            Padding(
+                              padding: const EdgeInsets.only(right: AppSpacing.sm),
+                              child: FilterChip(
+                                label: Text(
+                                  'Semua Tahun (${data.length})',
+                                  style: TextStyle(
+                                    color: _selectedTahunAjaran == null
+                                        ? Colors.white
+                                        : AppColors.primary,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                selected: _selectedTahunAjaran == null,
+                                onSelected: (_) {
+                                  setState(() {
+                                    _selectedTahunAjaran = null;
+                                  });
+                                },
+                                backgroundColor: Colors.grey[200],
+                                selectedColor: AppColors.primary,
+                                side: BorderSide(
+                                  color: _selectedTahunAjaran == null
+                                      ? AppColors.primary
+                                      : Colors.grey[300]!,
+                                ),
+                              ),
+                            ),
+                            // 🎯 Tab untuk setiap tahun ajaran
+                            ...(_availableTahunAjaran.toList()
+                              ..sort((a, b) => b.compareTo(a))) // Sort descending
+                              .map((tahun) {
+                              final count = data.where((item) => item['tahun_ajaran'] == tahun).length;
+                              return Padding(
+                                padding: const EdgeInsets.only(right: AppSpacing.sm),
+                                child: FilterChip(
+                                  label: Text(
+                                    '$tahun ($count)',
+                                    style: TextStyle(
+                                      color: _selectedTahunAjaran == tahun
+                                          ? Colors.white
+                                          : AppColors.primary,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  selected: _selectedTahunAjaran == tahun,
+                                  onSelected: (_) {
+                                    setState(() {
+                                      _selectedTahunAjaran = tahun;
+                                    });
+                                  },
+                                  backgroundColor: Colors.blue[50],
+                                  selectedColor: AppColors.secondary,
+                                  side: BorderSide(
+                                    color: _selectedTahunAjaran == tahun
+                                        ? AppColors.secondary
+                                        : Colors.blue[200]!,
+                                  ),
+                                ),
+                              );
+                            }),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: AppSpacing.md),
+                    ],
+                  ),
+                
+                Container(
               decoration: BoxDecoration(
                 border: Border.all(color: Colors.grey[300]!),
                 borderRadius: BorderRadius.circular(AppRadius.md),
@@ -2557,9 +2664,9 @@ class _EmbeddedHitungCPLContentState extends State<_EmbeddedHitungCPLContent>
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         ...List.generate(
-                          data.length,
+                          filteredData.length,
                           (index) {
-                            final item = data[index];
+                            final item = filteredData[index];
                             final mkId = item['matakuliah_id'] as int;
                             final tahunAjaran = item['tahun_ajaran'] as int;
                             final mkNama = item['matakuliah_nama'] as String;
@@ -2614,7 +2721,7 @@ class _EmbeddedHitungCPLContentState extends State<_EmbeddedHitungCPLContent>
                                     ],
                                   ),
                                 ),
-                                if (index < data.length - 1)
+                                if (index < filteredData.length - 1)
                                   Divider(height: 1),
                               ],
                             );
@@ -2625,6 +2732,8 @@ class _EmbeddedHitungCPLContentState extends State<_EmbeddedHitungCPLContent>
                   ),
                 ],
               ),
+            ),
+              ],
             );
           },
         ),
@@ -3546,18 +3655,36 @@ class _EmbeddedExportContent extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Export Data',
-            style: TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.bold,
+          Row(
+            children: [
+              const Icon(Icons.download_rounded, 
+                color: AppColors.primary, 
+                size: 28,
+              ),
+              const SizedBox(width: AppSpacing.md),
+              const Text(
+                'Export Data',
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.primary,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          Container(
+            height: 3,
+            width: 60,
+            decoration: BoxDecoration(
               color: AppColors.primary,
+              borderRadius: BorderRadius.circular(2),
             ),
           ),
-          const SizedBox(height: AppSpacing.lg),
+          const SizedBox(height: AppSpacing.xl),
           Wrap(
-            spacing: AppSpacing.md,
-            runSpacing: AppSpacing.md,
+            spacing: AppSpacing.lg,
+            runSpacing: AppSpacing.lg,
             children: [
               _buildExportCard(
                 icon: Icons.description,
@@ -3577,7 +3704,7 @@ class _EmbeddedExportContent extends StatelessWidget {
               ),
               _buildExportCard(
                 icon: Icons.assessment,
-                label: 'Export CPL & CPMK',
+                label: 'Export Nilai CPL dan CPMK',
                 subtitle: 'Laporan nilai CPL dan CPMK per mata kuliah',
                 color: const Color(0xFF8E44AD),
                 onTap: () {
@@ -3592,17 +3719,296 @@ class _EmbeddedExportContent extends StatelessWidget {
                 },
               ),
               _buildExportCard(
-                icon: Icons.file_download,
-                label: 'Export Data Sistem',
-                subtitle: 'Ekspor seluruh data sistem',
+                icon: Icons.school,
+                label: 'Export Korelasi CPL dengan Semester',
+                subtitle: 'Tabel korelasi CPL dengan nama matakuliah dan semester',
                 color: const Color(0xFF27AE60),
-                onTap: () => Navigator.pushNamed(context, '/export_data'),
+                onTap: () {
+                  _showKorelasiWithSemesterExportDialog(context);
+                },
+              ),
+              _buildExportCard(
+                icon: Icons.table_chart,
+                label: 'Export Korelasi CPL dan MK',
+                subtitle: 'Tabel korelasi CPL dengan  matakuliah',
+                color: const Color(0xFFE74C3C),
+                onTap: () {
+                  _showKorelasiExportDialog(context);
+                },
               ),
             ],
           ),
         ],
       ),
     );
+  }
+
+  void _showKorelasiExportDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Export Korelasi CPL & MK'),
+        content: const Text('Pilih bahasa laporan:'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Batal'),
+          ),
+          ElevatedButton.icon(
+            onPressed: () {
+              Navigator.pop(dialogContext);
+              _exportKorelasiCPLMK(context, language: 'id');
+            },
+            icon: const Icon(Icons.download, size: 16),
+            label: const Text('🇮🇩 Indonesia'),
+          ),
+          ElevatedButton.icon(
+            onPressed: () {
+              Navigator.pop(dialogContext);
+              _exportKorelasiCPLMK(context, language: 'en');
+            },
+            icon: const Icon(Icons.save, size: 16),
+            label: const Text('🇬🇧 English'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showKorelasiWithSemesterExportDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Export Korelasi CPL & MK (Semester)'),
+        content: const Text('Pilih bahasa laporan:'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Batal'),
+          ),
+          ElevatedButton.icon(
+            onPressed: () {
+              Navigator.pop(dialogContext);
+              _exportKorelasiCPLMK(context, language: 'id', includeSemester: true);
+            },
+            icon: const Icon(Icons.download, size: 16),
+            label: const Text('🇮🇩 Indonesia'),
+          ),
+          ElevatedButton.icon(
+            onPressed: () {
+              Navigator.pop(dialogContext);
+              _exportKorelasiCPLMK(context, language: 'en', includeSemester: true);
+            },
+            icon: const Icon(Icons.save, size: 16),
+            label: const Text('🇬🇧 English'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _exportKorelasiCPLMK(BuildContext context, {required String language, bool includeSemester = false}) async {
+    try {
+      // Show loading dialog
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) => Dialog(
+          backgroundColor: Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(AppSpacing.lg),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(
+                  width: 60,
+                  height: 60,
+                  child: CircularProgressIndicator(strokeWidth: 3),
+                ),
+                const SizedBox(height: AppSpacing.lg),
+                const Text(
+                  'Sedang membuat tabel korelasi...',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.primary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+
+      final dbHelper = DatabaseHelper();
+
+      // Get all data needed for correlation table
+      final allMatakuliah = await dbHelper.getAllMatakuliah();
+      final cplList = await dbHelper.getAllCPLMaster();
+
+      // Get all CPMK grouped by matakuliah
+      final Map<int, List<CPMK>> matakuliahCPMKMap = {};
+      for (final mk in allMatakuliah) {
+        if (mk.id != null) {
+          final cpmkList = await dbHelper.getCPMKByMatakuliah(mk.id!);
+          matakuliahCPMKMap[mk.id!] = cpmkList;
+        }
+      }
+
+      // Get all CPMK-CPL mappings
+      final allMappings = await dbHelper.getAllCPMKCPLMappings();
+      final Map<int, List<int>> cpmkCPLMapping = {};
+
+      print('[Export Korelasi] Total CPMK-CPL Mappings: ${allMappings.length}');
+      for (final mapping in allMappings) {
+        final cpmkId = mapping['cpmk_id'] as int?;
+        final cplId = mapping['cpl_id'] as int?;
+
+        if (cpmkId != null && cplId != null) {
+          cpmkCPLMapping.putIfAbsent(cpmkId, () => []).add(cplId);
+          print('  └─ CPMK $cpmkId → CPL $cplId');
+        }
+      }
+
+      // Get RPS CPL mappings for each matakuliah from RPS detail rows
+      final Map<int, List<String>> rpsRCPLMappings = {};
+      int rpsWithCPLCount = 0;
+      for (final mk in allMatakuliah) {
+        if (mk.id == null) continue;
+
+        final rpsDetails = await dbHelper.getRPSDetailByMatakuliah(mk.id!);
+        final mappedCPLCodes = <String>{};
+
+        for (final detail in rpsDetails) {
+          if (detail.cplIds != null && detail.cplIds!.isNotEmpty) {
+            for (final cplId in detail.cplIds!) {
+              final matches = cplList.where((cpl) => cpl.id == cplId).toList();
+              if (matches.isNotEmpty) {
+                final cpl = matches.first;
+                mappedCPLCodes.add(cpl.nomor);
+                mappedCPLCodes.add('CPL.${cpl.nomor}');
+              } else {
+                mappedCPLCodes.add(cplId.toString());
+              }
+            }
+          }
+        }
+
+        final rps = await dbHelper.getRPSByMatakuliah(mk.id!);
+        if (rps != null && rps.cplMappings != null && rps.cplMappings!.isNotEmpty) {
+          mappedCPLCodes.addAll(rps.cplMappings!.map((code) => code.trim()));
+        }
+
+        if (mappedCPLCodes.isNotEmpty) {
+          rpsRCPLMappings[mk.id!] = mappedCPLCodes.toList();
+          rpsWithCPLCount++;
+          print('[Export Korelasi] RPS ${mk.kode} (ID:${mk.id}) CPL Mappings: ${mappedCPLCodes.toList()}');
+        }
+      }
+      print('[Export Korelasi] RPS dengan CPL Mappings: $rpsWithCPLCount dari ${allMatakuliah.length}');
+      print('[Export Korelasi] CPMK Grouping per MK:');
+      for (final entry in matakuliahCPMKMap.entries) {
+        final mk = allMatakuliah.firstWhere((m) => m.id == entry.key, orElse: () => Matakuliah(
+          id: entry.key,
+          kode: 'UNKNOWN',
+          nama: 'UNKNOWN',
+          semester: '',
+          jenis: '',
+          sks: 0,
+          createdAt: DateTime.now(),
+        ));
+        print('  └─ ${mk.kode} (ID:${entry.key}): ${entry.value.length} CPMK');
+        for (final cpmk in entry.value) {
+          if (cpmkCPLMapping.containsKey(cpmk.id)) {
+            print('      └─ ${cpmk.kodeCPMK} → CPL: ${cpmkCPLMapping[cpmk.id]}');
+          }
+        }
+      }
+
+      // Generate PDF
+      final pdfFile = await CPLCPMKPDFGenerator.generateCoursesCPLCorrelationTable(
+        matakuliahList: allMatakuliah,
+        cplList: cplList,
+        matakuliahCPMKMap: matakuliahCPMKMap,
+        cpmkCPLMapping: cpmkCPLMapping,
+        rpsRCPLMappings: rpsRCPLMappings.isNotEmpty ? rpsRCPLMappings : null,
+        includeSemester: includeSemester,
+        language: language,
+      );
+
+      if (context.mounted) {
+        Navigator.pop(context); // Close loading dialog
+      }
+
+      // Build info message tentang mapping data
+      String infoMessage = '✓ PDF berhasil dibuat\n';
+      
+      if (cpmkCPLMapping.isEmpty && rpsRCPLMappings.isEmpty) {
+        infoMessage += '\n⚠️ PERHATIAN:\n'
+            '• Tidak ada CPMK-CPL mapping ditemukan\n'
+            '• Tidak ada CPL mappings di RPS\n\n'
+            '💡 Untuk menampilkan checkmark di tabel:\n'
+            '1. Buat/edit CPMK di menu "Kelola CPMK"\n'
+            '2. Setup mapping CPMK→CPL di menu "Mapping"\n'
+            '3. Atau set CPL mappings di RPS\n\n'
+            'Check console untuk detail lebih lanjut.';
+      } else {
+        if (cpmkCPLMapping.isNotEmpty) {
+          infoMessage += '✓ ${cpmkCPLMapping.length} CPMK terpetakan ke CPL\n';
+        } else {
+          infoMessage += '⚠️ Tidak ada CPMK-CPL mapping\n';
+        }
+        if (rpsRCPLMappings.isNotEmpty) {
+          infoMessage += '✓ ${rpsRCPLMappings.length} RPS memiliki CPL mappings';
+        }
+      }
+
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(infoMessage),
+            action: SnackBarAction(
+              label: 'Buka PDF',
+              onPressed: () async {
+                try {
+                  await CPLCPMKPDFGenerator.openPDF(pdfFile);
+                } catch (e) {
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('Error membuka PDF: $e'),
+                        backgroundColor: Colors.red,
+                      ),
+                    );
+                  }
+                }
+              },
+            ),
+            duration: const Duration(seconds: 8),
+            backgroundColor: cpmkCPLMapping.isEmpty && rpsRCPLMappings.isEmpty
+                ? Colors.orange[700]
+                : Colors.green[700],
+          ),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        Navigator.pop(context); // Close loading dialog
+      }
+
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: $e'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      }
+    }
   }
 
   Widget _buildExportCard({
@@ -3618,16 +4024,14 @@ class _EmbeddedExportContent extends StatelessWidget {
         onTap: onTap,
         borderRadius: BorderRadius.circular(AppRadius.md),
         child: Container(
-          width: 180,
-          padding: const EdgeInsets.symmetric(
-            horizontal: AppSpacing.md,
-            vertical: AppSpacing.lg,
-          ),
+          width: 220,
+          height: 240,
+          padding: const EdgeInsets.all(AppSpacing.lg),
           decoration: BoxDecoration(
             gradient: LinearGradient(
               colors: [
-                color.withValues(alpha: 0.85),
-                color.withValues(alpha: 0.65),
+                color.withValues(alpha: 0.9),
+                color.withValues(alpha: 0.75),
               ],
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
@@ -3635,33 +4039,56 @@ class _EmbeddedExportContent extends StatelessWidget {
             borderRadius: BorderRadius.circular(AppRadius.md),
             boxShadow: [
               BoxShadow(
-                color: color.withValues(alpha: 0.25),
-                blurRadius: 6,
-                offset: const Offset(0, 2),
+                color: color.withValues(alpha: 0.35),
+                blurRadius: 12,
+                offset: const Offset(0, 4),
+              ),
+              BoxShadow(
+                color: color.withValues(alpha: 0.15),
+                blurRadius: 20,
+                offset: const Offset(0, 8),
               ),
             ],
+            border: Border.all(
+              color: Colors.white.withValues(alpha: 0.2),
+              width: 1,
+            ),
           ),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              Icon(icon, size: 48, color: Colors.white),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.2),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(icon, size: 56, color: Colors.white),
+              ),
               const SizedBox(height: AppSpacing.md),
               Text(
                 label,
                 textAlign: TextAlign.center,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
                   color: Colors.white,
                   fontSize: 14,
-                  fontWeight: FontWeight.w600,
+                  fontWeight: FontWeight.w700,
+                  height: 1.2,
                 ),
               ),
-              const SizedBox(height: AppSpacing.xs),
+              const SizedBox(height: AppSpacing.sm),
               Text(
                 subtitle,
                 textAlign: TextAlign.center,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
                 style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.9),
+                  color: Colors.white.withValues(alpha: 0.85),
                   fontSize: 11,
+                  height: 1.3,
                 ),
               ),
             ],

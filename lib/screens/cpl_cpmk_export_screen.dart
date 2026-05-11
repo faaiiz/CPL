@@ -5,6 +5,7 @@ import '../services/cpl_cpmk_pdf_generator.dart';
 import '../models/matakuliah_model.dart';
 import '../models/mahasiswa_model.dart';
 import '../models/nilai_model.dart';
+import '../models/cpmk_model.dart';
 
 class CPLCPMKExportScreen extends StatefulWidget {
   final DatabaseHelper dbHelper;
@@ -42,6 +43,9 @@ class _CPLCPMKExportScreenState extends State<CPLCPMKExportScreen>
   // Tab 3: Export per angkatan
   int? _selectedAngkatan3;
   
+  // Tab 4: Export per angkatan (semua matakuliah)
+  int? _selectedAngkatan4;
+  
   bool _isLoading = true;
   bool _isExporting = false;
 
@@ -65,7 +69,7 @@ class _CPLCPMKExportScreenState extends State<CPLCPMKExportScreen>
     super.initState();
     _dbHelper = widget.dbHelper;
     _obeHelper = OBECalculationHelper(dbHelper: _dbHelper);
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(length: 5, vsync: this);
     _loadData();
   }
 
@@ -128,10 +132,11 @@ class _CPLCPMKExportScreenState extends State<CPLCPMKExportScreen>
           _selectedTahunAjaran = _tahunAjaranList.first;
         }
         
-        // Auto-select first angkatan for Tab 2 and 3
+        // Auto-select first angkatan for Tab 2, 3, and 4
         if (_angkatanList.isNotEmpty) {
           _selectedAngkatan2 = _angkatanList.first;
           _selectedAngkatan3 = _angkatanList.first;
+          _selectedAngkatan4 = _angkatanList.first;
           _filterMahasiswaByAngkatan(_selectedAngkatan2!);
         }
         
@@ -858,10 +863,13 @@ class _CPLCPMKExportScreenState extends State<CPLCPMKExportScreen>
           indicatorColor: Colors.white,
           labelColor: Colors.white,
           unselectedLabelColor: Colors.white70,
+          isScrollable: true,
           tabs: const [
             Tab(text: 'Per Mata Kuliah'),
             Tab(text: 'Per Mahasiswa'),
             Tab(text: 'Per Angkatan'),
+            Tab(text: 'Per Angkatan per MK'),
+            Tab(text: 'Korelasi CPL & MK'),
           ],
         ),
       ),
@@ -873,6 +881,8 @@ class _CPLCPMKExportScreenState extends State<CPLCPMKExportScreen>
                 _buildPerMatakuliahTab(),
                 _buildPerMahasiswaTab(),
                 _buildPerAngkatanTab(),
+                _buildPerAngkatanPerMatakuliahTab(),
+                _buildKorelasiCPLMKTab(),
               ],
             ),
     );
@@ -1633,6 +1643,857 @@ class _CPLCPMKExportScreenState extends State<CPLCPMKExportScreen>
                   height: 50,
                   child: ElevatedButton.icon(
                     onPressed: _isExporting ? null : () => _exportPerAngkatan(language: 'en'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF8E44AD),
+                      disabledBackgroundColor: Colors.grey[400],
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                    icon: _isExporting
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                Colors.white,
+                              ),
+                            ),
+                          )
+                        : const Icon(Icons.save, color: Colors.white),
+                    label: Text(
+                      _isExporting ? 'Sedang membuat laporan...' : 'Save as PDF',
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _exportPerAngkatanAllMatakuliah({String language = 'id'}) async {
+    if (_selectedAngkatan4 == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Silakan pilih tahun angkatan terlebih dahulu'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    try {
+      setState(() => _isExporting = true);
+
+      final angkatan = _selectedAngkatan4!;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Sedang membuat laporan PDF untuk semua mata kuliah...'),
+          duration: Duration(seconds: 10),
+        ),
+      );
+
+      // Get all mahasiswa in this cohort
+      final mahasiswaList = _allMahasiswa
+          .where((mhs) => mhs.tahunMasuk == angkatan)
+          .toList()
+        ..sort((a, b) => a.nim.compareTo(b.nim));
+
+      if (mahasiswaList.isEmpty) {
+        throw Exception('Tidak ada mahasiswa untuk tahun angkatan ini.');
+      }
+
+      print('[Export Angkatan All MK] Angkatan: $angkatan, Mahasiswa: ${mahasiswaList.length}');
+
+      // Get all nilai for this cohort across all courses
+      final allNilai = await _dbHelper.getAllNilai();
+      final mahasiswaIds = mahasiswaList.map((m) => m.id!).toSet();
+      
+      final nilaiForThisCohort = allNilai
+          .where((nilai) => mahasiswaIds.contains(nilai.mahasiswaId))
+          .toList();
+
+      print('[Export Angkatan All MK] Total nilai records: ${nilaiForThisCohort.length}');
+
+      if (nilaiForThisCohort.isEmpty) {
+        throw Exception('Tidak ada data nilai untuk tahun angkatan ini.');
+      }
+
+      // Get unique matakuliah IDs
+      final matakuliahIdSet = nilaiForThisCohort
+          .map((nilai) => nilai.matakuliahId)
+          .toSet()
+          .toList();
+
+      print('[Export Angkatan All MK] Unique courses: ${matakuliahIdSet.length}');
+
+      // Get CPL list once (reusable for all courses)
+      final cplList = await _dbHelper.getAllCPLMaster();
+
+      // Map untuk collect hasil per matakuliah: mkId -> {mkData, calculationResults}
+      final Map<int, Map<String, dynamic>> mkResultsMap = {};
+
+      // Process each matakuliah
+      for (final matakuliahId in matakuliahIdSet) {
+        try {
+          print('[Export Angkatan All MK] Processing MK ID: $matakuliahId');
+
+          // Get matakuliah details
+          final matakuliah = _matakuliahList.firstWhere(
+            (mk) => mk.id == matakuliahId,
+            orElse: () => Matakuliah(
+              id: matakuliahId,
+              kode: 'UNK',
+              nama: 'Unknown',
+              semester: '0',
+              jenis: 'wajib',
+              sks: 0,
+              createdAt: DateTime.now(),
+            ),
+          );
+
+          // Get nilai for this MK in this cohort
+          final nilaiForThisMK = nilaiForThisCohort
+              .where((nilai) => nilai.matakuliahId == matakuliahId)
+              .toList();
+
+          // Get nilai_komponen for students in this MK
+          final Map<int, Map<String, dynamic>> studentValuesMap = {};
+
+          for (final nilai in nilaiForThisMK) {
+            final mahasiswaId = nilai.mahasiswaId;
+            
+            final nilaiKomponen = await _dbHelper.getNilaiKomponen(
+              mahasiswaId: mahasiswaId,
+              matakuliahId: matakuliahId,
+              tahunAjaran: nilai.tahunAjaran,
+            );
+
+            if (nilaiKomponen != null) {
+              if (!studentValuesMap.containsKey(mahasiswaId)) {
+                studentValuesMap[mahasiswaId] = nilaiKomponen;
+              }
+            }
+          }
+
+          print('[Export Angkatan All MK]   Students with nilai: ${studentValuesMap.length}');
+
+          if (studentValuesMap.isEmpty) {
+            print('[Export Angkatan All MK]   Skipping - no nilai data');
+            continue;
+          }
+
+          // Get CPMK for this MK
+          final cpmkList = await _dbHelper.getCPMKByMatakuliah(matakuliahId);
+
+          // Build bobot maps
+          final subCpmkBobotMap = <String, Map<String, double>>{};
+          final cpmkSubCpmkMap = <String, Map<String, double>>{};
+          final cplCpmkMap = <String, Map<String, double>>{};
+
+          final rpsDetails = await _dbHelper.getRPSDetailByMatakuliah(matakuliahId);
+
+          for (final rps in rpsDetails) {
+            if (rps.subCpmkIds != null && rps.subCpmkIds!.isNotEmpty) {
+              for (final subCpmkId in rps.subCpmkIds!) {
+                final bobotMap = <String, double>{};
+                if (rps.bobot != null && rps.bobot! > 0) {
+                  bobotMap['aktivitas'] = (rps.bobot ?? 0) * 0.2;
+                  bobotMap['proyek'] = (rps.bobot ?? 0) * 0.3;
+                  bobotMap['kuis'] = (rps.bobot ?? 0) * 0.15;
+                  bobotMap['tugas'] = (rps.bobot ?? 0) * 0.15;
+                  bobotMap['uts'] = (rps.bobot ?? 0) * 0.1;
+                  bobotMap['uas'] = (rps.bobot ?? 0) * 0.1;
+                }
+                if (bobotMap.isNotEmpty) {
+                  subCpmkBobotMap[subCpmkId.toString()] = bobotMap;
+                }
+              }
+            }
+
+            if (rps.cpmkIds != null && rps.cpmkIds!.isNotEmpty) {
+              for (final cpmkId in rps.cpmkIds!) {
+                if (!cpmkSubCpmkMap.containsKey(cpmkId.toString())) {
+                  cpmkSubCpmkMap[cpmkId.toString()] = {};
+                }
+                if (rps.subCpmkIds != null) {
+                  for (final subCpmkId in rps.subCpmkIds!) {
+                    cpmkSubCpmkMap[cpmkId.toString()]![subCpmkId.toString()] = 14.29;
+                  }
+                }
+              }
+            }
+
+            if (rps.cplIds != null && rps.cplIds!.isNotEmpty) {
+              for (final cplId in rps.cplIds!) {
+                if (!cplCpmkMap.containsKey(cplId.toString())) {
+                  cplCpmkMap[cplId.toString()] = {};
+                }
+                if (rps.cpmkIds != null) {
+                  for (final cpmkId in rps.cpmkIds!) {
+                    cplCpmkMap[cplId.toString()]![cpmkId.toString()] =
+                        100.0 / (rps.cpmkIds!.length);
+                  }
+                }
+              }
+            }
+          }
+
+          final calculationResults = <int, OBECalculationResult>{};
+
+          // Calculate OBE for each student
+          for (final entry in studentValuesMap.entries) {
+            final mahasiswaId = entry.key;
+            final nilaiKomponen = entry.value;
+
+            try {
+              final nilaiMap = <String, double>{
+                'aktivitas': ((nilaiKomponen['nilai_aktivitas'] ?? 0) as num).toDouble(),
+                'proyek': ((nilaiKomponen['nilai_proyek'] ?? 0) as num).toDouble(),
+                'kuis': ((nilaiKomponen['nilai_kuis'] ?? 0) as num).toDouble(),
+                'tugas': ((nilaiKomponen['nilai_tugas'] ?? 0) as num).toDouble(),
+                'uts': ((nilaiKomponen['nilai_uts'] ?? 0) as num).toDouble(),
+                'uas': ((nilaiKomponen['nilai_uas'] ?? 0) as num).toDouble(),
+              };
+
+              if (subCpmkBobotMap.isNotEmpty && cpmkSubCpmkMap.isNotEmpty) {
+                final result = _obeHelper.calculateOBEComplete(
+                  nilaiKomponen: nilaiMap,
+                  subCpmkBobotMap: subCpmkBobotMap,
+                  cpmkSubCpmkMap: cpmkSubCpmkMap,
+                  cplCpmkMap: cplCpmkMap.isNotEmpty ? cplCpmkMap : null,
+                  printDebug: false,
+                );
+
+                if (result['status'] == 'success') {
+                  calculationResults[mahasiswaId] = OBECalculationResult(
+                    success: true,
+                    subCpmkValues: Map<String, double>.from(result['sub_cpmk'] ?? {}),
+                    cpmkValues: Map<String, double>.from(result['cpmk'] ?? {}),
+                    cplValues: Map<String, double>.from(result['cpl'] ?? {}),
+                  );
+                }
+              }
+            } catch (e) {
+              print('[Export Angkatan All MK] Error calculating OBE for student $mahasiswaId: $e');
+            }
+          }
+
+          // If no calculated results, create empty results
+          if (calculationResults.isEmpty) {
+            for (final entry in studentValuesMap.entries) {
+              calculationResults[entry.key] = OBECalculationResult(
+                success: true,
+                subCpmkValues: {},
+                cpmkValues: {},
+                cplValues: {},
+              );
+            }
+          }
+
+          // Get matakuliah name based on language
+          String matakuliahName = matakuliah.nama;
+          if (language == 'en' && matakuliah.namaEng != null && matakuliah.namaEng!.isNotEmpty) {
+            matakuliahName = matakuliah.namaEng!;
+          }
+
+          // Get students that have calculation results
+          final studentListForReport = mahasiswaList
+              .where((mhs) => calculationResults.containsKey(mhs.id))
+              .toList();
+
+          mkResultsMap[matakuliahId] = {
+            'matakuliah': matakuliah.copyWith(nama: matakuliahName),
+            'mahasiswaList': studentListForReport,
+            'cpmkList': cpmkList,
+            'calculationResults': calculationResults,
+          };
+
+          print('[Export Angkatan All MK]   ✓ Processed - ${calculationResults.length} students');
+        } catch (e) {
+          print('[Export Angkatan All MK] Error processing MK $matakuliahId: $e');
+        }
+      }
+
+      if (mkResultsMap.isEmpty) {
+        throw Exception('Tidak ada data perhitungan untuk angkatan ini.');
+      }
+
+      print('[Export Angkatan All MK] Total MK processed: ${mkResultsMap.length}');
+
+      // Generate single PDF with all courses
+      final pdfFile = await CPLCPMKPDFGenerator.generatePerAngkatanAllMatakuliahReport(
+        angkatan: angkatan,
+        mkResultsMap: mkResultsMap,
+        cplList: cplList,
+        language: language,
+      );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).clearSnackBars();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('✓ PDF berhasil dibuat'),
+            action: SnackBarAction(
+              label: 'Buka',
+              onPressed: () async {
+                try {
+                  await CPLCPMKPDFGenerator.openPDF(pdfFile);
+                } catch (e) {
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('Error membuka PDF: $e'),
+                        backgroundColor: Colors.red,
+                      ),
+                    );
+                  }
+                }
+              },
+            ),
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).clearSnackBars();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: $e'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isExporting = false);
+      }
+    }
+  }
+
+  Widget _buildPerAngkatanPerMatakuliahTab() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header Card
+          Card(
+            elevation: 2,
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF8E44AD).withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: const Icon(
+                          Icons.school,
+                          color: Color(0xFF8E44AD),
+                          size: 24,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Unduh Laporan per Angkatan (Semua Mata Kuliah)',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'CPL & CPMK untuk satu tahun angkatan di semua mata kuliah',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.grey[600],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          const SizedBox(height: 24),
+
+          // Selection Section
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              border: Border.all(color: Colors.grey[300]!),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Pilihan Laporan',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 16),
+
+                // Tahun Angkatan Dropdown
+                const Text(
+                  'Tahun Angkatan',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF2C3E50),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<int>(
+                  value: _selectedAngkatan4,
+                  items: _angkatanList.map((tahun) {
+                    return DropdownMenuItem<int>(
+                      value: tahun,
+                      child: Text('$tahun'),
+                    );
+                  }).toList(),
+                  onChanged: (int? value) {
+                    setState(() => _selectedAngkatan4 = value);
+                  },
+                  decoration: InputDecoration(
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
+                    prefixIcon: const Icon(Icons.calendar_today),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 24),
+
+          // Info Section
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: const Color(0xFF8E44AD).withOpacity(0.05),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: const Color(0xFF8E44AD).withOpacity(0.2),
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      Icons.info_outline,
+                      size: 16,
+                      color: const Color(0xFF8E44AD),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Laporan akan menampilkan CPL & CPMK untuk SEMUA mata kuliah '
+                        'yang diambil oleh mahasiswa tahun angkatan terpilih.',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Colors.grey[700],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 32),
+
+          // Export Buttons
+          Row(
+            children: [
+              Expanded(
+                child: SizedBox(
+                  height: 50,
+                  child: ElevatedButton.icon(
+                    onPressed:
+                        _isExporting ? null : () => _exportPerAngkatanAllMatakuliah(language: 'id'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF8E44AD),
+                      disabledBackgroundColor: Colors.grey[400],
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                    icon: _isExporting
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                Colors.white,
+                              ),
+                            ),
+                          )
+                        : const Icon(Icons.download, color: Colors.white),
+                    label: Text(
+                      _isExporting ? 'Sedang membuat laporan...' : 'Unduh Laporan PDF',
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: SizedBox(
+                  height: 50,
+                  child: ElevatedButton.icon(
+                    onPressed:
+                        _isExporting ? null : () => _exportPerAngkatanAllMatakuliah(language: 'en'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF8E44AD),
+                      disabledBackgroundColor: Colors.grey[400],
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                    icon: _isExporting
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                Colors.white,
+                              ),
+                            ),
+                          )
+                        : const Icon(Icons.save, color: Colors.white),
+                    label: Text(
+                      _isExporting ? 'Sedang membuat laporan...' : 'Save as PDF',
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _exportKorelasiCPLMK({String language = 'id'}) async {
+    try {
+      setState(() => _isExporting = true);
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Sedang membuat tabel korelasi mata kuliah dengan CPL...'),
+          duration: Duration(seconds: 10),
+        ),
+      );
+
+      // Get all matakuliah
+      final allMatakuliah = _matakuliahList;
+
+      // Get all CPL
+      final cplList = await _dbHelper.getAllCPLMaster();
+
+      // Get all CPMK grouped by matakuliah
+      final Map<int, List<CPMK>> matakuliahCPMKMap = {};
+      for (final mk in allMatakuliah) {
+        if (mk.id != null) {
+          final cpmkList = await _dbHelper.getCPMKByMatakuliah(mk.id!);
+          matakuliahCPMKMap[mk.id!] = cpmkList;
+        }
+      }
+
+      // Get all CPMK-CPL mappings
+      final allMappings = await _dbHelper.getAllCPMKCPLMappings();
+      final Map<int, List<int>> cpmkCPLMapping = {};
+
+      for (final mapping in allMappings) {
+        final cpmkId = mapping['cpmk_id'] as int?;
+        final cplId = mapping['cpl_id'] as int?;
+
+        if (cpmkId != null && cplId != null) {
+            cpmkCPLMapping.putIfAbsent(cpmkId, () => []).add(cplId);
+        }
+      }
+
+      print('[Export Korelasi] Matakuliah: ${allMatakuliah.length}');
+      print('[Export Korelasi] CPL: ${cplList.length}');
+      print('[Export Korelasi] CPMK-CPL Mappings: ${cpmkCPLMapping.length}');
+
+      // Get RPS CPL mappings for each matakuliah
+      final Map<int, List<String>> rpsRCPLMappings = {};
+      for (final mk in allMatakuliah) {
+        if (mk.id != null) {
+          final rps = await _dbHelper.getRPSByMatakuliah(mk.id!);
+          if (rps != null && rps.cplMappings != null) {
+            rpsRCPLMappings[mk.id!] = rps.cplMappings!;
+            print('[Export Korelasi RPS] MK ${mk.kode}: CPL Mappings = ${rps.cplMappings}');
+          }
+        }
+      }
+
+      // Generate PDF
+      final pdfFile = await CPLCPMKPDFGenerator.generateCoursesCPLCorrelationTable(
+        matakuliahList: allMatakuliah,
+        cplList: cplList,
+        matakuliahCPMKMap: matakuliahCPMKMap,
+        cpmkCPLMapping: cpmkCPLMapping,
+        rpsRCPLMappings: rpsRCPLMappings.isNotEmpty ? rpsRCPLMappings : null,
+        language: language,
+      );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).clearSnackBars();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('✓ PDF berhasil dibuat'),
+            action: SnackBarAction(
+              label: 'Buka',
+              onPressed: () async {
+                try {
+                  await CPLCPMKPDFGenerator.openPDF(pdfFile);
+                } catch (e) {
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('Error membuka PDF: $e'),
+                        backgroundColor: Colors.red,
+                      ),
+                    );
+                  }
+                }
+              },
+            ),
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).clearSnackBars();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: $e'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isExporting = false);
+      }
+    }
+  }
+
+  Widget _buildKorelasiCPLMKTab() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header Card
+          Card(
+            elevation: 2,
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF8E44AD).withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: const Icon(
+                          Icons.grid_3x3,
+                          color: Color(0xFF8E44AD),
+                          size: 24,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Tabel Korelasi Mata Kuliah dengan CPL',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'Menampilkan hubungan antara mata kuliah dan Capaian Pembelajaran Lulusan',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.grey[600],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          const SizedBox(height: 24),
+
+          // Info Card
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: const Color(0xFF8E44AD).withOpacity(0.05),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: const Color(0xFF8E44AD).withOpacity(0.2),
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(
+                      Icons.info_outline,
+                      size: 20,
+                      color: const Color(0xFF8E44AD),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Deskripsi Laporan',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF8E44AD),
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            'Laporan ini menampilkan matriks korelasi yang menunjukkan hubungan antara setiap mata kuliah dengan Capaian Pembelajaran Lulusan (CPL). '
+                            'Tanda centang (✓) menunjukkan bahwa mata kuliah tersebut berkontribusi dalam pencapaian CPL tertentu.\n\n'
+                            'Informasi yang ditampilkan:\n'
+                            '• Kode dan nama mata kuliah\n'
+                            '• CPL yang dicapai (CPL.1 hingga CPL.7)\n'
+                            '• Tanda centang (✓) menunjukkan ada korelasi',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey[700],
+                              height: 1.5,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 32),
+
+          // Export Buttons
+          Row(
+            children: [
+              Expanded(
+                child: SizedBox(
+                  height: 50,
+                  child: ElevatedButton.icon(
+                    onPressed: _isExporting ? null : () => _exportKorelasiCPLMK(language: 'id'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF8E44AD),
+                      disabledBackgroundColor: Colors.grey[400],
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                    icon: _isExporting
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                Colors.white,
+                              ),
+                            ),
+                          )
+                        : const Icon(Icons.download, color: Colors.white),
+                    label: Text(
+                      _isExporting ? 'Sedang membuat laporan...' : 'Unduh Tabel PDF',
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: SizedBox(
+                  height: 50,
+                  child: ElevatedButton.icon(
+                    onPressed: _isExporting ? null : () => _exportKorelasiCPLMK(language: 'en'),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: const Color(0xFF8E44AD),
                       disabledBackgroundColor: Colors.grey[400],
